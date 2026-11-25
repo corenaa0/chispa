@@ -322,13 +322,39 @@ label.check input { width: 18px; height: 18px; accent-color: var(--accent); }
   padding: 3px 10px; border-radius: 999px; font-size: 13px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.tile-block {
-  position: absolute; right: 8px; top: 8px;
+.tile-actions { position: absolute; right: 8px; top: 8px; display: flex; gap: 6px; }
+.tile-btn {
   width: 32px; height: 32px; border-radius: 50%;
   border: none; background: rgba(0,0,0,.5); cursor: pointer; font-size: 14px;
-  opacity: .55; transition: opacity .2s, background .2s;
+  display: grid; place-items: center;
+  opacity: .6; transition: opacity .2s, background .2s;
 }
-.tile-block:hover { opacity: 1; background: var(--danger); }
+.tile-btn:hover { opacity: 1; background: var(--danger); }
+.tile-btn.report:hover { background: #f59e0b; }
+
+/* Diálogo de reporte */
+.muted { color: var(--muted); font-size: 13.5px; }
+.report-img { display: block; width: 100%; max-height: 240px; object-fit: contain; background: #000; border-radius: 10px; margin: 8px 0; }
+.reasons { border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px; margin: 8px 0; }
+.reasons legend { font-weight: 700; padding: 0 6px; }
+.reasons label { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-weight: 500; margin: 0; }
+.reasons input { accent-color: var(--accent-2); }
+#dlgReport textarea {
+  width: 100%; background: var(--bg-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px; font: inherit; resize: vertical;
+}
+#dlgReport label.check { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; }
+dialog h3 { margin: 14px 0 4px; font-size: 15px; }
+
+/* Pantalla de acceso bloqueado */
+.ban-screen {
+  position: fixed; inset: 0; z-index: 100;
+  display: grid; place-items: center; padding: 16px;
+  background: linear-gradient(165deg, #12062b 0%, #250b52 50%, #3d0f2e 100%);
+}
+.ban-screen .card { max-width: 420px; text-align: center; background: rgba(22, 9, 48, .95); border: 1px solid #7f1d1d; border-radius: 20px; padding: 28px 24px; }
+.ban-screen h1 { margin: 6px 0 10px; }
+.banned-icon { font-size: 54px; }
 .spinner.small { width: 28px; height: 28px; border-width: 3px; margin: 0; }
 .local {
   position: absolute; right: 14px; bottom: 14px;

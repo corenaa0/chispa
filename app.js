@@ -66,6 +66,10 @@ const el = {
   inAuto: $('#inAuto'), quick: $('#quick'),
   log: $('#log'), typing: $('#typing'), formChat: $('#formChat'), inMsg: $('#inMsg'), btnSend: $('#btnSend'),
   msgCounter: $('#msgCounter'),
+  dlgReport: $('#dlgReport'), formReport: $('#formReport'), reportName: $('#reportName'),
+  reportImg: $('#reportImg'), reportNoImg: $('#reportNoImg'), reportDetails: $('#reportDetails'),
+  reportBlock: $('#reportBlock'), btnReportSend: $('#btnReportSend'),
+  banned: $('#banned'), bannedReason: $('#bannedReason'), bannedUntil: $('#bannedUntil'),
   reactLocal: $('#reactLocal'),
   dlgShare: $('#dlgShare'), dlgNormas: $('#dlgNormas'), shareLink: $('#shareLink'), shareSala: $('#shareSala'),
   qr: $('#qr'), btnCopy: $('#btnCopy'), btnNativeShare: $('#btnNativeShare'), toast: $('#toast'),
@@ -157,6 +161,71 @@ async function loadIceServers() {
   console.info(`[Chispa] TURN ${state.hasTurn ? 'activo' : 'NO configurado'}`);
 }
 
+/* ================= Moderación (Supabase, opcional) =================
+ * Si config.js tiene supabaseUrl y supabaseKey:
+ *  - al entrar se registra la IP (la ve el servidor) y se revisa si está bloqueada;
+ *  - el anfitrión de cada sala solo empareja a quien hizo ese registro y no está bloqueado;
+ *  - el botón 🚩 envía un reporte con una captura del video.
+ * Si no está configurado, la app funciona igual pero sin reportes ni bloqueos.
+ */
+const backendOn = () => { const c = window.CHISPA_CONFIG || {}; return !!(c.supabaseUrl && c.supabaseKey); };
+
+async function rpc(fn, args) {
+  const c = window.CHISPA_CONFIG || {};
+  if (!backendOn()) return { skipped: true };
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(`${c.supabaseUrl.replace(/\/+$/, '')}/rest/v1/rpc/${fn}`, {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: { apikey: c.supabaseKey, Authorization: `Bearer ${c.supabaseKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(args),
+    });
+    clearTimeout(t);
+    if (!res.ok) { console.warn('rpc', fn, res.status, await res.text()); return { error: true }; }
+    return { data: await res.json() };
+  } catch (e) {
+    console.warn('rpc', fn, e);
+    return { error: true };
+  }
+}
+
+function deviceId() {
+  let id = storeGet('chispa:device');
+  if (!id) {
+    id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    storeSet('chispa:device', id);
+  }
+  return id;
+}
+
+async function checkIn() {
+  const r = await rpc('check_in', {
+    p_peer: state.me.id, p_device: state.device, p_name: state.name, p_sala: state.sala, p_ua: navigator.userAgent,
+  });
+  return r.data || {};
+}
+
+// Si el servidor no responde dejamos pasar (para que la app no se caiga por eso).
+async function peerAllowed(peerId) {
+  const r = await rpc('peer_allowed', { p_peer: peerId });
+  return r.data !== false;
+}
+
+function showBanned(reason, until) {
+  safe(() => leaveGroupLocal(true));
+  state.searching = false;
+  safe(() => state.lobbyPeer && state.lobbyPeer.destroy());
+  safe(() => state.me && state.me.destroy());
+  safe(() => state.localStream && state.localStream.getTracks().forEach((t) => t.stop()));
+  el.bannedReason.textContent = reason ? `Motivo: ${reason}` : 'Un administrador bloqueó tu acceso por no cumplir las normas.';
+  el.bannedUntil.textContent = until ? `Hasta: ${new Date(until).toLocaleString()}` : '';
+  el.inicio.classList.add('hidden');
+  el.app.classList.add('hidden');
+  el.banned.classList.remove('hidden');
+}
+
 /* ================= Emparejador (solo corre en el anfitrión) ================= */
 class Lobby {
   constructor() {
@@ -169,9 +238,30 @@ class Lobby {
     const c = this.clients.get(id) || {
       id, name: 'Anónimo', interests: [], size: MIN_SIZE, status: 'idle',
       gid: null, lastGroup: null, blocked: new Set(), waitingSince: 0,
+      verified: !backendOn() || ref === 'self', verifiedAt: 0, verifying: false,
     };
     c.send = send; c.ref = ref; c.seen = Date.now();
     this.clients.set(id, c);
+  }
+
+  // Pregunta al servidor si esta persona registró su entrada y no está bloqueada.
+  verify(c) {
+    if (!backendOn() || c.ref === 'self' || c.verifying) return;
+    c.verifying = true;
+    peerAllowed(c.id).then((ok) => {
+      c.verifying = false;
+      if (this.clients.get(c.id) !== c) return;
+      if (!ok) {
+        safe(() => c.send({ type: 'banned' }));
+        const conn = c.ref;
+        this.remove(c.id);
+        setTimeout(() => safe(() => conn && conn.close && conn.close()), 500);
+        return;
+      }
+      c.verified = true;
+      c.verifiedAt = Date.now();
+      this.update();
+    });
   }
 
   remove(id, ref) {
@@ -197,12 +287,15 @@ class Lobby {
         if (m.status === 'busy' && typeof m.gid === 'string') this.restoreMember(c, m.gid, clampSize(m.groupSize));
         else if (m.status === 'waiting') { this.leaveGroup(c); this.setWaiting(c); }
         else { this.leaveGroup(c); c.status = 'idle'; }
+        this.verify(c);
         this.update();
         break;
       case 'find':
         this.leaveGroup(c);
         c.size = clampSize(m.size);
         this.setWaiting(c);
+        // Revalidamos cada minuto por si un administrador lo bloqueó mientras estaba conectado.
+        if (Date.now() - c.verifiedAt > 60000) this.verify(c);
         this.update();
         break;
       case 'stop':
@@ -276,7 +369,7 @@ class Lobby {
    *    El grupo nuevo toma el número más pequeño de sus integrantes, así nadie supera su máximo.
    */
   place(c) {
-    if (c.status !== 'waiting') return;
+    if (c.status !== 'waiting' || !c.verified) return;
     const now = Date.now();
     const patient = now - c.waitingSince > 8000;
     const flexible = (x) => now - x.waitingSince > FALLBACK_MS;
@@ -296,7 +389,7 @@ class Lobby {
     }
     // 2) Otra persona esperando → grupo nuevo del tamaño más pequeño de los dos.
     for (const b of this.clients.values()) {
-      if (b === c || b.status !== 'waiting' || this.blockedBetween(c, b)) continue;
+      if (b === c || b.status !== 'waiting' || !b.verified || this.blockedBetween(c, b)) continue;
       const size = Math.min(c.size, b.size);
       if ((c.size !== size && !flexible(c)) || (b.size !== size && !flexible(b))) continue;
       const recent = c.lastGroup && b.lastGroup === c.lastGroup;
@@ -505,6 +598,7 @@ function onLobbyMsg(m) {
     case 'join': onJoin(m); break;
     case 'left': onLeft(m); break;
     case 'alone': onAlone(m); break;
+    case 'banned': showBanned(); break;
   }
 }
 
@@ -513,7 +607,16 @@ function initPeer() {
   setLobbyState('Conectando…');
   const me = new Peer(PEER_OPTS);
   state.me = me;
-  me.on('open', () => { state.meOpened = true; connectLobby(); });
+  me.on('open', async () => {
+    state.meOpened = true;
+    if (!state.checkedIn) {
+      state.checkedIn = true;
+      setLobbyState('Verificando acceso…');
+      const r = await checkIn();
+      if (r.banned) { showBanned(r.reason, r.until); return; }
+    }
+    connectLobby();
+  });
   me.on('disconnected', () => setTimeout(() => { if (!me.destroyed && me.disconnected) me.reconnect(); }, 1000));
   me.on('call', onIncomingCall);
   me.on('connection', onIncomingConn);
@@ -885,15 +988,68 @@ function stop() {
   lobbySend({ type: 'stop' });
 }
 
-function blockPeer(id) {
+function blockPeer(id, skipConfirm) {
   const p = getPeer(id);
   if (!p) return;
-  if (!confirm(`¿Bloquear a ${p.name}? No volverá a tocarte en esta sesión y saldrás de esta conversación.`)) return;
+  if (!skipConfirm && !confirm(`¿Bloquear a ${p.name}? No volverá a tocarte en esta sesión y saldrás de esta conversación.`)) return;
   state.blocked.add(p.id);
   lobbySend({ type: 'block', who: p.id });
   const name = p.name;
   find();
   addMsg('sys', `Bloqueaste a ${name}.`);
+}
+
+/* ----- Reportes ----- */
+// Toma una foto del video de esa persona en este momento (JPEG pequeño para guardar en el reporte).
+function captureFrame(video) {
+  const w = video.videoWidth, h = video.videoHeight;
+  if (!w || !h) return null;
+  const scale = Math.min(1, 480 / w);
+  const c = document.createElement('canvas');
+  c.width = Math.round(w * scale);
+  c.height = Math.round(h * scale);
+  return safe(() => {
+    c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.7);
+  }) || null;
+}
+
+function openReport(id) {
+  const p = getPeer(id);
+  if (!p) return;
+  const image = captureFrame(p.tile.video);
+  state.reportTarget = { id: p.id, name: p.name, image };
+  el.reportName.textContent = p.name;
+  el.reportImg.classList.toggle('hidden', !image);
+  if (image) el.reportImg.src = image;
+  el.reportNoImg.classList.toggle('hidden', !!image);
+  el.formReport.reset();
+  el.reportBlock.checked = true;
+  el.dlgReport.showModal();
+}
+
+async function submitReport(e) {
+  e.preventDefault();
+  const t = state.reportTarget;
+  if (!t) return;
+  const reason = new FormData(el.formReport).get('reason');
+  if (!reason) { toast('Elige un motivo'); return; }
+  el.btnReportSend.disabled = true;
+  el.btnReportSend.textContent = 'Enviando…';
+  const r = await rpc('submit_report', {
+    p_reported_peer: t.id, p_reported_name: t.name, p_reason: String(reason),
+    p_details: clean(el.reportDetails.value, 500), p_sala: state.sala, p_image: t.image,
+    p_reporter_peer: state.me ? state.me.id : null, p_reporter_device: state.device, p_reporter_name: state.name,
+  });
+  el.btnReportSend.disabled = false;
+  el.btnReportSend.textContent = 'Enviar reporte';
+  if (r.data && r.data.ok) toast('✅ Reporte enviado. Un administrador lo revisará.', 4000);
+  else if (r.data && r.data.error) toast(r.data.error, 5000);
+  else if (r.skipped) toast('Los reportes todavía no están configurados en esta app.', 4500);
+  else toast('No se pudo enviar el reporte. Inténtalo de nuevo.', 4500);
+  el.dlgReport.close();
+  state.reportTarget = null;
+  if (el.reportBlock.checked) blockPeer(t.id, true);
 }
 
 function sendAll(obj) {
@@ -973,15 +1129,24 @@ function createTile(p) {
   nameEl.textContent = p.name;
   const flags = document.createElement('span');
   label.append(nameEl, flags);
+  const actions = document.createElement('div');
+  actions.className = 'tile-actions';
+  const report = document.createElement('button');
+  report.type = 'button';
+  report.className = 'tile-btn report';
+  report.title = `Reportar a ${p.name}`;
+  report.textContent = '🚩';
+  report.addEventListener('click', () => openReport(p.id));
   const block = document.createElement('button');
   block.type = 'button';
-  block.className = 'tile-block';
+  block.className = 'tile-btn';
   block.title = `Bloquear a ${p.name}`;
   block.textContent = '🚫';
   block.addEventListener('click', () => blockPeer(p.id));
+  actions.append(report, block);
   const reactions = document.createElement('div');
   reactions.className = 'reactions';
-  wrap.append(video, wait, label, block, reactions);
+  wrap.append(video, wait, label, actions, reactions);
   el.tiles.append(wrap);
   return { el: wrap, video, nameEl, flags, reactions };
 }
@@ -1282,6 +1447,8 @@ function makeEmbers() {
 
 (function boot() {
   makeEmbers();
+  state.device = deviceId();
+  el.formReport.addEventListener('submit', submitReport);
   const params = new URLSearchParams(location.search);
   const salaParam = params.get('sala');
   if (salaParam && slug(salaParam) !== PUBLIC_ROOM) el.inSala.value = salaParam;

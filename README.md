@@ -76,3 +76,32 @@ o con Python: `python -m http.server 8000`, y abre `http://localhost:8000/?sala=
 - Salas temáticas visibles (lista de salas activas).
 - Panel del profesor: ver cuántos hay conectados y cerrar la sala.
 - Instalable como app en el teléfono (PWA).
+
+## Moderación: reportes, IP y panel `/admin`
+
+- **🚩 Reportar** (botón sobre el video de cada persona): elige un motivo, escribe detalles y se envía una
+  **foto del video** de esa persona en ese momento. Opcionalmente la bloquea y pasa a otra conversación.
+- **Registro de IP**: al entrar, la app llama a la base de datos, que guarda la IP (la ve el servidor, el navegador
+  no la puede falsear), el nombre, la sala y un identificador del dispositivo.
+- **Bloqueos**: por IP o por dispositivo, con duración (1 h, 24 h, 7 días, 30 días o permanente). Quien está
+  bloqueado ve una pantalla de "Acceso bloqueado". Además, el anfitrión de cada sala pregunta al servidor antes de
+  emparejar a alguien, así que no basta con modificar la app para saltarse el bloqueo.
+- **Panel `/admin`** (`https://TU-USUARIO.github.io/chispa/admin/`): inicio de sesión de administrador, reportes con su
+  captura, conexiones recientes con buscador, lista de bloqueos y botón para borrar registros antiguos.
+
+### Activarlo (Supabase, gratis)
+
+1. Crea un proyecto en <https://supabase.com>.
+2. **SQL Editor** → pega el archivo [`supabase.sql`](supabase.sql) → **Run**.
+3. **Authentication → Users → Add user**: crea el usuario administrador (correo y contraseña).
+4. En el SQL Editor ejecuta: `insert into public.admins (email) values ('tu-correo');`
+5. **Project Settings → API**: copia la **Project URL** y la clave **anon public** en `config.js`
+   (`supabaseUrl` y `supabaseKey`). Nunca pongas la clave `service_role`.
+
+### Límites a tener en cuenta
+
+- En un colegio, **todos los que usan el mismo Wi-Fi comparten la misma IP**: bloquear esa IP bloquea a todos.
+  El panel avisa cuando una IP la usaron varios dispositivos; en ese caso es mejor bloquear el dispositivo.
+- Alguien decidido puede cambiar de IP (datos móviles, VPN) o borrar los datos del navegador para cambiar de
+  dispositivo. Los bloqueos frenan a la mayoría, pero no son infalibles.
+- Por privacidad, borra de vez en cuando los registros antiguos desde el panel (botón 🧹).

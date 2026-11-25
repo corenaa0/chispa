@@ -7,12 +7,12 @@
   <meta name="description" content="Videochat aleatorio entre compañeros: entra a una sala, comparte el enlace y conoce a quien te toque.">
   <meta name="theme-color" content="#0f1020">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
-  <link rel="stylesheet" href="style.css?v=9">
+  <link rel="stylesheet" href="style.css?v=10">
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
-  <script src="config.js?v=9"></script>
-  <script src="retos.js?v=9"></script>
-  <script src="app.js?v=9" defer></script>
+  <script src="config.js?v=10"></script>
+  <script src="retos.js?v=10"></script>
+  <script src="app.js?v=10" defer></script>
 </head>
 <body>
 
@@ -57,7 +57,7 @@
         <button class="btn primary big" type="submit">Entrar a la sala</button>
       </form>
     </div>
-    <footer>Las videollamadas van directo entre navegadores (WebRTC). Nada se graba ni se guarda.</footer>
+    <footer>Las videollamadas van directo entre navegadores y no se graban. Guardamos tu IP al entrar para moderación (ver normas).</footer>
   </main>
 
   <!-- ============ Pantalla de chat ============ -->
@@ -168,11 +168,51 @@
       <li>Trata a todos con respeto: nada de insultos, acoso ni contenido ofensivo.</li>
       <li>No grabes ni hagas capturas de nadie sin su permiso.</li>
       <li>No compartas datos personales (dirección, teléfono, contraseñas).</li>
-      <li>Si alguien te incomoda, usa el botón <b>🚫</b> sobre su video para bloquearla y pasar a otra conversación.</li>
+      <li>Si alguien te incomoda, usa <b>🚩 Reportar</b> o <b>🚫 Bloquear</b> sobre su video.</li>
       <li>Las salas son para la clase: comparte el enlace solo con tus compañeros.</li>
+    </ul>
+    <h3>Privacidad y moderación</h3>
+    <ul>
+      <li>Las videollamadas no se graban: van directo entre navegadores.</li>
+      <li>Al entrar guardamos tu <b>IP</b>, tu nombre y la sala, para poder bloquear a quien incumpla las normas.</li>
+      <li>Si alguien te reporta, se guarda <b>una foto de tu video</b> en ese momento para que un administrador la revise.</li>
+      <li>Quien incumpla las normas puede quedar bloqueado.</li>
     </ul>
     <div class="row end"><button class="btn primary" type="button" data-close>Entendido</button></div>
   </dialog>
+
+  <dialog id="dlgReport">
+    <h2>🚩 Reportar a <span id="reportName"></span></h2>
+    <p class="muted">Un administrador revisará el reporte. Se envía esta foto del video tomada al pulsar Reportar.</p>
+    <img id="reportImg" class="report-img" alt="Foto del video de la persona reportada">
+    <p id="reportNoImg" class="muted hidden">No se pudo tomar foto del video (puede que aún no cargara). El reporte se enviará sin imagen.</p>
+    <form id="formReport" autocomplete="off">
+      <fieldset class="reasons">
+        <legend>Motivo</legend>
+        <label><input type="radio" name="reason" value="Contenido sexual o desnudos"> Contenido sexual o desnudos</label>
+        <label><input type="radio" name="reason" value="Acoso, insultos u odio"> Acoso, insultos u odio</label>
+        <label><input type="radio" name="reason" value="Violencia o amenazas"> Violencia o amenazas</label>
+        <label><input type="radio" name="reason" value="Spam o publicidad"> Spam o publicidad</label>
+        <label><input type="radio" name="reason" value="Otro"> Otro</label>
+      </fieldset>
+      <textarea id="reportDetails" maxlength="500" rows="3" placeholder="Cuéntanos qué pasó (opcional)"></textarea>
+      <label class="check"><input type="checkbox" id="reportBlock" checked> Bloquear y pasar a otra conversación</label>
+      <div class="row end">
+        <button class="btn ghost" type="button" data-close>Cancelar</button>
+        <button class="btn primary" type="submit" id="btnReportSend">Enviar reporte</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="banned" class="screen ban-screen hidden">
+    <div class="card">
+      <div class="banned-icon">🚫</div>
+      <h1>Acceso bloqueado</h1>
+      <p id="bannedReason"></p>
+      <p id="bannedUntil" class="muted"></p>
+      <p class="muted">Si crees que es un error, habla con el administrador de la app.</p>
+    </div>
+  </div>
 
   <div id="toast" class="toast" role="status"></div>
 </body>

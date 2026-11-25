@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Chispa · Administración</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+  <link rel="stylesheet" href="../style.css?v=10">
+  <link rel="stylesheet" href="admin.css?v=10">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+  <script src="../config.js?v=10"></script>
+  <script src="admin.js?v=10" defer></script>
+</head>
+<body class="admin">
+
+  <!-- Sin configurar -->
+  <main id="viewSetup" class="center hidden">
+    <div class="card">
+      <h1>🛡️ Panel de Chispa</h1>
+      <p>El panel todavía no está conectado a la base de datos.</p>
+      <ol>
+        <li>Crea un proyecto gratis en <b>supabase.com</b>.</li>
+        <li>En <b>SQL Editor</b> ejecuta el archivo <code>supabase.sql</code>.</li>
+        <li>Copia la <b>Project URL</b> y la clave <b>anon public</b> en <code>config.js</code>.</li>
+      </ol>
+    </div>
+  </main>
+
+  <!-- Inicio de sesión -->
+  <main id="viewLogin" class="center hidden">
+    <form class="card" id="formLogin" autocomplete="on">
+      <div class="brand"><span class="logo">🛡️</span><h1>Administración</h1></div>
+      <p class="muted">Entra con la cuenta de administrador de Chispa.</p>
+      <label>Correo
+        <input id="inEmail" type="email" autocomplete="username" required>
+      </label>
+      <label>Contraseña
+        <input id="inPass" type="password" autocomplete="current-password" required>
+      </label>
+      <p class="error hidden" id="loginError"></p>
+      <button class="btn primary big" type="submit" id="btnLogin">Entrar</button>
+    </form>
+  </main>
+
+  <!-- Cuenta sin permisos -->
+  <main id="viewNoAdmin" class="center hidden">
+    <div class="card">
+      <h1>⛔ Sin permisos</h1>
+      <p>La cuenta <b id="noAdminEmail"></b> no está en la lista de administradores.</p>
+      <p class="muted">Agrégala en Supabase con: <code>insert into public.admins (email) values ('correo');</code></p>
+      <button class="btn" type="button" data-logout>Cerrar sesión</button>
+    </div>
+  </main>
+
+  <!-- Panel -->
+  <div id="viewPanel" class="panel hidden">
+    <header class="admin-top">
+      <div class="brand small"><span class="logo">🛡️</span><b>Chispa · Admin</b></div>
+      <div class="admin-user"><span id="userEmail"></span>
+        <button class="btn ghost" type="button" id="btnRefresh" title="Actualizar">↻ Actualizar</button>
+        <button class="btn ghost" type="button" data-logout>Salir</button>
+      </div>
+    </header>
+
+    <section class="kpis">
+      <div class="kpi"><span class="kpi-num" id="kpiPending">–</span><span>Reportes pendientes</span></div>
+      <div class="kpi"><span class="kpi-num" id="kpiToday">–</span><span>Entradas hoy</span></div>
+      <div class="kpi"><span class="kpi-num" id="kpiIps">–</span><span>IPs distintas hoy</span></div>
+      <div class="kpi"><span class="kpi-num" id="kpiBans">–</span><span>Bloqueos activos</span></div>
+    </section>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab on" type="button" data-tab="reports">🚩 Reportes <span class="badge" id="badgeReports"></span></button>
+      <button class="tab" type="button" data-tab="visits">🌐 Conexiones</button>
+      <button class="tab" type="button" data-tab="bans">⛔ Bloqueos</button>
+    </nav>
+
+    <!-- Reportes -->
+    <section class="tab-panel" id="tabReports">
+      <div class="toolbar">
+        <label>Mostrar
+          <select id="selStatus">
+            <option value="pendiente">Pendientes</option>
+            <option value="resuelto">Resueltos</option>
+            <option value="descartado">Descartados</option>
+            <option value="todos">Todos</option>
+          </select>
+        </label>
+      </div>
+      <div class="report-list" id="reportList"></div>
+    </section>
+
+    <!-- Conexiones -->
+    <section class="tab-panel hidden" id="tabVisits">
+      <div class="toolbar">
+        <input id="inSearch" placeholder="Buscar por nombre, IP o sala…">
+        <button class="btn" type="button" id="btnSearch">Buscar</button>
+        <button class="btn ghost" type="button" id="btnPurge" title="Privacidad: borra registros antiguos">🧹 Borrar registros de más de 30 días</button>
+      </div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Fecha</th><th>Nombre</th><th>Sala</th><th>IP</th><th>Dispositivo</th><th>Navegador</th><th></th></tr></thead>
+          <tbody id="visitRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Bloqueos -->
+    <section class="tab-panel hidden" id="tabBans">
+      <div class="toolbar">
+        <button class="btn" type="button" id="btnManualBan">+ Bloquear IP manualmente</button>
+      </div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Tipo</th><th>Valor</th><th>Motivo</th><th>Desde</th><th>Hasta</th><th></th></tr></thead>
+          <tbody id="banRows"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- Diálogo: bloquear -->
+  <dialog id="dlgBan">
+    <form id="formBan">
+      <h2>⛔ Bloquear <span id="banKindLabel"></span></h2>
+      <label>Valor
+        <input id="banValue" required>
+      </label>
+      <p class="warn hidden" id="banShared"></p>
+      <label>Motivo (lo verá la persona bloqueada)
+        <input id="banReason" maxlength="120" placeholder="Ej. Contenido inapropiado">
+      </label>
+      <label>Duración
+        <select id="banDuration">
+          <option value="1">1 hora</option>
+          <option value="24" selected>24 horas</option>
+          <option value="168">7 días</option>
+          <option value="720">30 días</option>
+          <option value="0">Permanente</option>
+        </select>
+      </label>
+      <div class="row end">
+        <button class="btn ghost" type="button" data-close>Cancelar</button>
+        <button class="btn danger-solid" type="submit">Bloquear</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Imagen ampliada -->
+  <dialog id="dlgImage" class="dlg-image">
+    <img id="bigImage" alt="Captura del reporte">
+    <div class="row end"><button class="btn" type="button" data-close>Cerrar</button></div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status"></div>
+</body>
+</html>
