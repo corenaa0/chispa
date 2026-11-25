@@ -15,6 +15,9 @@ con normas de convivencia y un botón para bloquear.
 - 👥 **Llamadas en grupo**: eliges con cuántas personas hablar a la vez (2 = 1 a 1, hasta 8). Solo te unimos con
   quienes eligieron el mismo número; el grupo empieza con 2 y los demás van llegando hasta llenarlo.
   También se puede abrir directo con `?grupo=4` en el enlace.
+- 🪜 Si no hay suficientes personas con tu número, a los 5 segundos te unimos a un grupo más pequeño
+  (7, 6, 5… hasta 1 a 1). Nunca te ponemos en un grupo más grande de lo que elegiste.
+- 🎯 Juegos en el chat: **Rompehielos**, **Retos** y **¿Qué prefieres?** (llegan a todo el grupo).
 - 🌎 **Sala pública por defecto**: si no pones código de sala, te emparejamos al azar con todos los conectados.
 - 🚪 Salas privadas opcionales por código: `?sala=mi-clase` en el enlace.
 - 🎭 El nombre también es opcional: si lo dejas vacío te asignamos un apodo al azar.
@@ -22,8 +25,7 @@ con normas de convivencia y un botón para bloquear.
 - 🎯 Emparejamiento por **intereses en común** (y evita repetir con la misma persona).
 - ⏭ **Siguiente** (o tecla `Esc`), ⏹ Detener y modo **Auto** (busca a otra persona si la actual se va).
 - 💬 Chat de texto con indicador "escribiendo…".
-- 🎲 **Rompehielos**: pregunta al azar para romper el silencio.
-- 😂 Reacciones con emojis que flotan sobre el video.
+- 😂 Reacciones con emojis que flotan sobre el video (👋 😂 ❤️ 🔥 👏 😡).
 - 🎤📷 Silenciar micrófono / apagar cámara (el otro ve el estado), 🔄 cambiar de cámara en el móvil.
 - 🙈 **Modo sin cámara**: entras con un avatar animado.
 - 🚫 Bloquear (botón sobre el video de cada persona): esa persona ya no te vuelve a tocar en la sesión.

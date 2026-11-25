@@ -53,7 +53,14 @@ a { color: var(--accent); }
 .btn.ghost { background: transparent; }
 .btn.big { width: 100%; padding: 14px; font-size: 16px; }
 .btn.icon { width: 44px; height: 44px; padding: 0; display: inline-grid; place-items: center; font-size: 18px; }
-.btn.icon.off { background: var(--danger); border-color: transparent; }
+.btn.icon svg {
+  width: 20px; height: 20px; display: block;
+  fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+}
+.btn.icon .ic-off { display: none; }
+.btn.icon.off .ic-on { display: none; }
+.btn.icon.off .ic-off { display: block; }
+.btn.icon.off { background: var(--danger); border-color: transparent; color: #fff; }
 .btn.danger:hover:not(:disabled) { background: var(--danger); }
 
 /* ---------- Inicio ---------- */
@@ -268,9 +275,13 @@ video.mirror { transform: scaleX(-1); }
 .msg.sys { align-self: center; background: transparent; color: var(--muted); font-size: 13px; text-align: center; max-width: 100%; }
 .msg.ice { align-self: stretch; text-align: center; background: rgba(255,176,32,.12); border: 1px dashed var(--accent); color: var(--text); max-width: 100%; }
 .typing { padding: 0 16px 4px; color: var(--muted); font-size: 12.5px; font-style: italic; }
-.quick { display: flex; gap: 6px; padding: 8px 12px; flex-wrap: wrap; border-top: 1px solid var(--line); }
-.chip { border: 1px solid var(--line); background: var(--panel-2); color: var(--text); border-radius: 999px; padding: 6px 10px; font-size: 16px; cursor: pointer; }
-.chip.wide { font-size: 13px; font-weight: 600; margin-left: auto; }
+.quick { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--line); }
+.quick-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.quick-row.emojis .chip { flex: 1; min-width: 38px; display: grid; place-items: center; line-height: 1; }
+.chip { border: 1px solid var(--line); background: var(--panel-2); color: var(--text); border-radius: 999px; padding: 6px 10px; font-size: 16px; cursor: pointer; transition: transform .08s, background .2s; }
+.chip:hover:not(:disabled) { background: #30356a; }
+.chip:active:not(:disabled) { transform: scale(.95); }
+.chip.game { flex: 1; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
 .chip:disabled { opacity: .4; cursor: not-allowed; }
 .composer { display: flex; gap: 8px; padding: 0 12px 8px; }
 .composer input { margin: 0; }

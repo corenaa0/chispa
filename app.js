@@ -14,16 +14,49 @@
  *  - Si el anfitrión se va, los demás compiten por reservar el ID y uno nuevo toma el relevo.
  */
 
-const PREFIX = 'chispa-v2-';
+const PREFIX = 'chispa-v3-';
 const MIN_SIZE = 2;
 const MAX_SIZE = 8;
+// Si tras estos ms no hay gente con tu mismo número, te unimos a un grupo más pequeño.
+const FALLBACK_MS = 5000;
 const STUN_SERVERS = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
 const PEER_OPTS = {
   debug: 1,
   config: { iceServers: [...STUN_SERVERS] },
 };
 const NETWORK_TIP = 'Tu red podría estar bloqueando la conexión. Prueba con otra red (Wi-Fi ↔ datos móviles) y abre el enlace en Chrome o Safari, no dentro de WhatsApp o Instagram.';
-const EMOJIS = ['👋', '😂', '❤️', '🔥', '👏'];
+const EMOJIS = ['👋', '😂', '❤️', '🔥', '👏', '😡'];
+const RETOS = [
+  'Imita a tu animal favorito durante 5 segundos 🐒',
+  'Muestra a la cámara el objeto más raro que tengas cerca 🔍',
+  'Di un trabalenguas sin equivocarte 👅',
+  'Haz tu mejor cara de sorpresa y mantenla 5 segundos 😲',
+  'Canta el coro de una canción que todos conozcan 🎤',
+  'Cuenta un chiste malo (mientras peor, mejor) 🤡',
+  'Habla como robot hasta tu próximo turno 🤖',
+  'Dibuja algo en 20 segundos y muéstralo; los demás adivinan ✏️',
+  'Haz 5 sentadillas en cámara 🏋️',
+  'Di 3 cosas que tengas en tu bolsillo o mochila 🎒',
+  'Describe tu día solo con emojis en el chat 📝',
+  'Imita a un profesor (sin decir quién es) 👨‍🏫',
+  'Haz el sonido de 3 animales seguidos 🐮🐸🦆',
+  'Mantén una mano en la cabeza hasta que alguien diga tu nombre 🙋',
+  'Cuenta tu talento más inútil y demuéstralo ✨',
+];
+const PREFIERES = [
+  '¿Qué prefieres: poder volar o ser invisible?',
+  '¿Qué prefieres: vivir sin música o sin series?',
+  '¿Qué prefieres: viajar al pasado o al futuro?',
+  '¿Qué prefieres: no usar el teléfono una semana o no comer dulces un mes?',
+  '¿Qué prefieres: hablar todos los idiomas o tocar todos los instrumentos?',
+  '¿Qué prefieres: siempre tener frío o siempre tener calor?',
+  '¿Qué prefieres: ser famoso o ser millonario en secreto?',
+  '¿Qué prefieres: playa sin internet o ciudad con internet lento?',
+  '¿Qué prefieres: saber cocinar de todo o saber arreglar de todo?',
+  '¿Qué prefieres: un perro que hable o un gato que cante?',
+  '¿Qué prefieres: vacaciones eternas sin amigos o clases eternas con amigos?',
+  '¿Qué prefieres: comer pizza o hamburguesa por el resto de tu vida?',
+];
 const ROMPEHIELOS = [
   '¿Cuál es la última canción que tuviste en repetición?',
   '¿Qué app usas más en tu teléfono y por qué?',
@@ -41,6 +74,12 @@ const ROMPEHIELOS = [
   '¿Qué superpoder elegirías y para qué lo usarías?',
   '¿Cuál es tu plan ideal de fin de semana?',
 ];
+// Juegos del chat: cada botón manda una tarjeta al azar a todo el grupo.
+const GAMES = {
+  ice: { icon: '🎲', title: 'Rompehielos', list: ROMPEHIELOS },
+  reto: { icon: '🎯', title: 'Reto', list: RETOS },
+  prefiere: { icon: '🤔', title: '¿Qué prefieres?', list: PREFIERES },
+};
 
 const $ = (s) => document.querySelector(s);
 const el = {
@@ -53,7 +92,7 @@ const el = {
   overlay: $('#overlay'), overlayText: $('#overlayText'), overlaySub: $('#overlaySub'), spinner: $('#spinner'),
   groupTag: $('#groupTag'), groupLabel: $('#groupLabel'), timer: $('#timer'),
   btnNext: $('#btnNext'), btnStop: $('#btnStop'), btnMic: $('#btnMic'), btnCam: $('#btnCam'),
-  btnFlip: $('#btnFlip'), btnShare: $('#btnShare'), btnIce: $('#btnIce'),
+  btnFlip: $('#btnFlip'), btnShare: $('#btnShare'),
   inAuto: $('#inAuto'), quick: $('#quick'),
   log: $('#log'), typing: $('#typing'), formChat: $('#formChat'), inMsg: $('#inMsg'), btnSend: $('#btnSend'),
   reactLocal: $('#reactLocal'),
@@ -258,37 +297,50 @@ class Lobby {
 
   blockedBetween(a, b) { return a.blocked.has(b.id) || b.blocked.has(a.id); }
 
+  /*
+   * Reglas de emparejamiento:
+   *  - El número que eliges es tu MÁXIMO de personas por llamada.
+   *  - Primero te juntamos con quienes eligieron exactamente tu mismo número.
+   *  - Si tras FALLBACK_MS no hay nadie, aceptamos grupos más pequeños (7, 6, 5… hasta 1 a 1).
+   *    El grupo nuevo toma el número más pequeño de sus integrantes, así nadie supera su máximo.
+   */
   place(c) {
     if (c.status !== 'waiting') return;
     const now = Date.now();
     const patient = now - c.waitingSince > 8000;
+    const flexible = (x) => now - x.waitingSince > FALLBACK_MS;
     let best = null, bestScore = -Infinity;
 
-    // 1) Grupos abiertos del mismo tamaño (se prefieren para que se vayan llenando).
+    // 1) Grupos abiertos (se prefieren para que se vayan llenando).
     for (const g of this.groups.values()) {
-      if (g.size !== c.size || g.members.size >= g.size) continue;
+      if (g.members.size >= g.size) continue;
+      const exact = g.size === c.size;
+      if (!exact && !(g.size < c.size && flexible(c))) continue;
       if (g.id === c.lastGroup && !patient) continue;
       const members = [...g.members].map((id) => this.clients.get(id)).filter(Boolean);
       if (members.some((m) => this.blockedBetween(c, m))) continue;
       const common = new Set(members.flatMap((m) => commonInterests(c.interests, m.interests))).size;
-      const score = 100 + g.members.size * 5 + common * 10 + Math.random();
+      const score = (exact ? 300 : 100) + g.size * 3 + g.members.size * 5 + common * 10 + Math.random();
       if (score > bestScore) { best = { g }; bestScore = score; }
     }
-    // 2) Otra persona esperando con el mismo tamaño elegido → grupo nuevo.
+    // 2) Otra persona esperando → grupo nuevo del tamaño más pequeño de los dos.
     for (const b of this.clients.values()) {
-      if (b === c || b.status !== 'waiting' || b.size !== c.size || this.blockedBetween(c, b)) continue;
+      if (b === c || b.status !== 'waiting' || this.blockedBetween(c, b)) continue;
+      const size = Math.min(c.size, b.size);
+      if ((c.size !== size && !flexible(c)) || (b.size !== size && !flexible(b))) continue;
       const recent = c.lastGroup && b.lastGroup === c.lastGroup;
       if (recent && (!patient || now - b.waitingSince < 8000)) continue;
-      const score = commonInterests(c.interests, b.interests).length * 10 + Math.random() - (recent ? 50 : 0);
-      if (score > bestScore) { best = { b }; bestScore = score; }
+      const score = (c.size === b.size ? 200 : 0) + size * 3
+        + commonInterests(c.interests, b.interests).length * 10 + Math.random() - (recent ? 50 : 0);
+      if (score > bestScore) { best = { b, size }; bestScore = score; }
     }
     if (!best) return;
     if (best.g) this.join(c, best.g);
-    else this.create(c, best.b);
+    else this.create(c, best.b, best.size);
   }
 
-  create(a, b) {
-    const g = { id: `g${Math.random().toString(36).slice(2, 10)}`, size: a.size, members: new Set([a.id, b.id]), changed: Date.now() };
+  create(a, b, size) {
+    const g = { id: `g${Math.random().toString(36).slice(2, 10)}`, size: clampSize(size), members: new Set([a.id, b.id]), changed: Date.now() };
     this.groups.set(g.id, g);
     a.status = b.status = 'busy';
     a.gid = b.gid = g.id;
@@ -635,7 +687,6 @@ function toggleMic() {
   state.micOn = !state.micOn;
   state.localStream.getAudioTracks().forEach((t) => { t.enabled = state.micOn; });
   el.btnMic.classList.toggle('off', !state.micOn);
-  el.btnMic.textContent = state.micOn ? '🎤' : '🔇';
   el.btnMic.title = state.micOn ? 'Silenciar micrófono' : 'Activar micrófono';
   sendAll(mediaState());
 }
@@ -658,6 +709,9 @@ function onGroup(m) {
   state.searching = false;
   state.group = { gid: m.gid, size: clampSize(m.size), peers: new Map(), startedAt: 0 };
   el.log.replaceChildren();
+  if (state.group.size < state.size) {
+    addMsg('sys', `No había suficientes personas para un ${sizeLabel(state.size)}, así que te unimos a ${state.group.size === 2 ? 'una conversación 1 a 1' : `un ${sizeLabel(state.group.size)}`}.`);
+  }
   addMsg('sys', state.group.size === 2
     ? 'Conectando con alguien nuevo…'
     : `Entraste a un ${sizeLabel(state.group.size)}. Irán llegando más personas a medida que se conecten.`);
@@ -901,9 +955,11 @@ function onPeerData(p, d) {
     case 'react':
       if (EMOJIS.includes(d.e)) floatEmoji(p.tile.reactions, d.e);
       break;
-    case 'ice':
-      if (Number.isInteger(d.i) && ROMPEHIELOS[d.i]) addMsg('ice', `🎲 ${p.name}: ${ROMPEHIELOS[d.i]}`);
+    case 'game': {
+      const game = Object.prototype.hasOwnProperty.call(GAMES, d.g) ? GAMES[d.g] : null;
+      if (game && Number.isInteger(d.i) && game.list[d.i]) addGameMsg(game, p.name, game.list[d.i]);
       break;
+    }
     case 'state': {
       const flags = [];
       if (!d.mic) flags.push('🔇');
@@ -975,11 +1031,19 @@ function updateClock() {
 }
 
 function updateSearchingHint() {
-  const others = Math.max(0, sameSizeCount() - 1);
+  const same = Math.max(0, sameSizeCount() - 1);
+  const anyone = Math.max(0, state.stats.online - 1);
   const mode = sizeLabel(state.size);
-  el.overlaySub.textContent = others === 0
-    ? `Nadie más eligió ${mode} por ahora. Invita a alguien con 🔗 Invitar o cambia el número de personas.`
-    : `Hay ${others} persona${others === 1 ? '' : 's'} más con tu mismo ajuste (${mode}).`;
+  if (same > 0) {
+    el.overlaySub.textContent = `Hay ${same} persona${same === 1 ? '' : 's'} más con tu mismo ajuste (${mode}).`
+      + (state.size > 2 ? ' Si no se juntan suficientes, te uniremos a un grupo más pequeño.' : '');
+  } else if (anyone > 0 && state.size > 2) {
+    el.overlaySub.textContent = `Nadie más eligió ${mode}. En unos segundos te uniremos con quienes eligieron un grupo más pequeño.`;
+  } else if (anyone > 0) {
+    el.overlaySub.textContent = `Hay ${anyone} persona${anyone === 1 ? '' : 's'} más en la sala. Te conectamos en cuanto alguien pulse Empezar.`;
+  } else {
+    el.overlaySub.textContent = 'Por ahora estás solo en la sala. ¡Invita a alguien con el botón 🔗 Invitar!';
+  }
 }
 
 function setUI(mode) {
@@ -1019,6 +1083,19 @@ function addMsg(kind, text, who) {
   const t = document.createElement('span');
   t.textContent = text;
   d.append(t);
+  el.log.append(d);
+  el.log.scrollTop = el.log.scrollHeight;
+}
+
+function addGameMsg(game, who, text) {
+  const d = document.createElement('div');
+  d.className = 'msg ice';
+  const head = document.createElement('span');
+  head.className = 'who';
+  head.textContent = `${game.icon} ${game.title} · ${who}`;
+  const t = document.createElement('span');
+  t.textContent = text;
+  d.append(head, t);
   el.log.append(d);
   el.log.scrollTop = el.log.scrollHeight;
 }
@@ -1143,9 +1220,10 @@ el.inMsg.addEventListener('input', () => {
 el.quick.addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b) return;
-  if (b === el.btnIce) {
-    const i = Math.floor(Math.random() * ROMPEHIELOS.length);
-    if (sendAll({ t: 'ice', i })) addMsg('ice', `🎲 Tú: ${ROMPEHIELOS[i]}`);
+  const game = b.dataset.game && GAMES[b.dataset.game];
+  if (game) {
+    const i = Math.floor(Math.random() * game.list.length);
+    if (sendAll({ t: 'game', g: b.dataset.game, i })) addGameMsg(game, 'Tú', game.list[i]);
   } else if (b.dataset.emoji && sendAll({ t: 'react', e: b.dataset.emoji })) {
     floatEmoji(el.reactLocal, b.dataset.emoji);
   }
