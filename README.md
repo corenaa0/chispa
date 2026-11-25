@@ -12,7 +12,9 @@ con normas de convivencia y un botón para bloquear.
 ## Funciones
 
 - 🎥 Videollamada 1 a 1 directa entre navegadores (WebRTC, nada pasa por un servidor propio ni se graba).
-- 🚪 Salas por código: `?sala=mi-clase` en el enlace.
+- 🌎 **Sala pública por defecto**: si no pones código de sala, te emparejamos al azar con todos los conectados.
+- 🚪 Salas privadas opcionales por código: `?sala=mi-clase` en el enlace.
+- 🎭 El nombre también es opcional: si lo dejas vacío te asignamos un apodo al azar.
 - 🔗 Botón **Invitar** con enlace para copiar, compartir nativo en el móvil y **código QR**.
 - 🎯 Emparejamiento por **intereses en común** (y evita repetir con la misma persona).
 - ⏭ **Siguiente** (o tecla `Esc`), ⏹ Detener y modo **Auto** (busca a otra persona si la actual se va).

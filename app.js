@@ -78,6 +78,9 @@ const safe = (fn) => { try { return fn(); } catch (e) { console.warn(e); } };
 const storeGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
 const storeSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* sin almacenamiento */ } };
 const lobbyId = () => PREFIX + state.sala;
+const PUBLIC_ROOM = 'general';
+const isPublicRoom = () => state.sala === PUBLIC_ROOM;
+const roomLabel = () => (isPublicRoom() ? '🌎 Sala pública' : `#${state.sala}`);
 function randomNick() {
   const a = ['Zorro', 'Búho', 'Gato', 'Panda', 'Lobo', 'Delfín', 'Koala', 'Tigre', 'Halcón', 'Pulpo'];
   const b = ['Veloz', 'Curioso', 'Feliz', 'Sabio', 'Audaz', 'Tranqui', 'Brillante', 'Ninja', 'Cósmico', 'Genial'];
@@ -694,7 +697,9 @@ function setUI(mode) {
   if (mode === 'idle') {
     el.overlayText.innerHTML = 'Pulsa <b>Empezar</b> para conocer a alguien';
   } else if (mode === 'searching') {
-    el.overlayText.textContent = `Buscando a alguien en #${state.sala}…`;
+    el.overlayText.textContent = isPublicRoom()
+      ? 'Buscando a alguien al azar en la sala pública…'
+      : `Buscando a alguien en #${state.sala}…`;
     updateSearchingHint();
   } else if (mode === 'connecting') {
     el.overlayText.textContent = `Conectando con ${state.partner.name}…`;
@@ -732,14 +737,15 @@ function floatEmoji(container, emoji) {
 function shareUrl() {
   const u = new URL(location.href);
   u.search = ''; u.hash = '';
-  u.searchParams.set('sala', state.sala || slug(el.inSala.value));
+  const sala = state.sala || slug(el.inSala.value);
+  if (sala !== PUBLIC_ROOM) u.searchParams.set('sala', sala);
   return u.toString();
 }
 
 function openShare() {
   const url = shareUrl();
   el.shareLink.value = url;
-  el.shareSala.textContent = `#${state.sala}`;
+  el.shareSala.textContent = isPublicRoom() ? 'pública' : `#${state.sala}`;
   el.qr.replaceChildren();
   if (window.qrcode) safe(() => {
     const q = window.qrcode(0, 'M');
@@ -769,12 +775,13 @@ el.form.addEventListener('submit', async (e) => {
   safe(() => { state.audioCtx = new (window.AudioContext || window.webkitAudioContext)(); });
 
   const url = new URL(location.href);
-  url.searchParams.set('sala', state.sala);
+  if (isPublicRoom()) url.searchParams.delete('sala');
+  else url.searchParams.set('sala', state.sala);
   history.replaceState(null, '', url);
 
   el.inicio.classList.add('hidden');
   el.app.classList.remove('hidden');
-  el.lblSala.textContent = `#${state.sala}`;
+  el.lblSala.textContent = roomLabel();
   setUI('idle');
   await initMedia(el.inSoloTexto.checked);
   initPeer();
@@ -792,7 +799,8 @@ el.btnBlock.addEventListener('click', blockPartner);
 el.btnShare.addEventListener('click', openShare);
 el.btnCopy.addEventListener('click', copyLink);
 el.btnNativeShare.addEventListener('click', () => {
-  navigator.share({ title: 'Chispa', text: `¡Entra a mi sala #${state.sala} en Chispa!`, url: el.shareLink.value }).catch(() => {});
+  const text = isPublicRoom() ? '¡Entra a Chispa y conoce a alguien al azar!' : `¡Entra a mi sala #${state.sala} en Chispa!`;
+  navigator.share({ title: 'Chispa', text, url: el.shareLink.value }).catch(() => {});
 });
 
 el.formChat.addEventListener('submit', (e) => {
@@ -832,7 +840,8 @@ window.addEventListener('pagehide', () => {
 /* ================= Arranque ================= */
 (function boot() {
   const params = new URLSearchParams(location.search);
-  if (params.get('sala')) el.inSala.value = params.get('sala');
+  const salaParam = params.get('sala');
+  if (salaParam && slug(salaParam) !== PUBLIC_ROOM) el.inSala.value = salaParam;
   el.inName.value = storeGet('chispa:name') || '';
   el.inIntereses.value = storeGet('chispa:interests') || '';
   if (!window.Peer) {
