@@ -18,6 +18,6 @@
  * En Metered puedes limitar la clave a tu dominio (corenaa0.github.io) desde su panel.
  */
 window.CHISPA_CONFIG = {
-  meteredUrl: '',
+  meteredUrl: 'https://chispa.metered.live/api/v1/turn/credentials?apiKey=5c539f49ef27b70193ac93b853786276ac33',
   turnServers: [],
 };
