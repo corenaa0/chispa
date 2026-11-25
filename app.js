@@ -1132,7 +1132,7 @@ function setSize(n, fromUser) {
   el.selSize.value = String(state.size);
   el.sizeHint.textContent = state.size === 2
     ? 'Conversación 1 a 1: tú y otra persona.'
-    : `Llamada grupal de hasta ${state.size} personas contándote a ti. Solo te unimos con quienes eligieron ${state.size}.`;
+    : `Llamada grupal de hasta ${state.size} personas contándote a ti. Primero buscamos a quienes eligieron ${state.size}; si no hay, te unimos a un grupo más pequeño.`;
   if (!fromUser || !state.me) return;
   lobbySend({ type: 'size', size: state.size });
   if (state.searching && !state.group) {
@@ -1263,7 +1263,25 @@ window.addEventListener('pagehide', () => {
 });
 
 /* ================= Arranque ================= */
+// Chispas flotando en la pantalla de inicio.
+function makeEmbers() {
+  const box = document.getElementById('embers');
+  if (!box || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const count = innerWidth < 600 ? 22 : 40;
+  for (let i = 0; i < count; i++) {
+    const s = document.createElement('span');
+    const size = 2 + Math.random() * 5;
+    s.style.left = `${Math.random() * 100}%`;
+    s.style.width = s.style.height = `${size}px`;
+    s.style.animationDuration = `${6 + Math.random() * 8}s`;
+    s.style.animationDelay = `${-Math.random() * 14}s`;
+    s.style.setProperty('--drift', `${Math.round((Math.random() - 0.5) * 140)}px`);
+    box.append(s);
+  }
+}
+
 (function boot() {
+  makeEmbers();
   const params = new URLSearchParams(location.search);
   const salaParam = params.get('sala');
   if (salaParam && slug(salaParam) !== PUBLIC_ROOM) el.inSala.value = salaParam;

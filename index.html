@@ -7,17 +7,21 @@
   <meta name="description" content="Videochat aleatorio entre compañeros: entra a una sala, comparte el enlace y conoce a quien te toque.">
   <meta name="theme-color" content="#0f1020">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
-  <link rel="stylesheet" href="style.css?v=8">
+  <link rel="stylesheet" href="style.css?v=9">
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
-  <script src="config.js?v=8"></script>
-  <script src="retos.js?v=8"></script>
-  <script src="app.js?v=8" defer></script>
+  <script src="config.js?v=9"></script>
+  <script src="retos.js?v=9"></script>
+  <script src="app.js?v=9" defer></script>
 </head>
 <body>
 
   <!-- ============ Pantalla de inicio ============ -->
   <main id="inicio" class="screen inicio">
+    <div class="glow glow-1" aria-hidden="true"></div>
+    <div class="glow glow-2" aria-hidden="true"></div>
+    <div class="fire" aria-hidden="true"></div>
+    <div class="embers" id="embers" aria-hidden="true"></div>
     <div class="card">
       <div class="brand"><span class="logo">⚡</span><h1>Chispa</h1></div>
       <p class="tagline">Videochat aleatorio 1 a 1 o en grupo (hasta 8). Entra, comparte el enlace y conoce a quien te toque.</p>
