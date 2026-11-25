@@ -11,7 +11,10 @@ con normas de convivencia y un botón para bloquear.
 
 ## Funciones
 
-- 🎥 Videollamada 1 a 1 directa entre navegadores (WebRTC, nada pasa por un servidor propio ni se graba).
+- 🎥 Videollamada directa entre navegadores (WebRTC, nada pasa por un servidor propio ni se graba).
+- 👥 **Llamadas en grupo**: eliges con cuántas personas hablar a la vez (2 = 1 a 1, hasta 8). Solo te unimos con
+  quienes eligieron el mismo número; el grupo empieza con 2 y los demás van llegando hasta llenarlo.
+  También se puede abrir directo con `?grupo=4` en el enlace.
 - 🌎 **Sala pública por defecto**: si no pones código de sala, te emparejamos al azar con todos los conectados.
 - 🚪 Salas privadas opcionales por código: `?sala=mi-clase` en el enlace.
 - 🎭 El nombre también es opcional: si lo dejas vacío te asignamos un apodo al azar.
@@ -23,7 +26,7 @@ con normas de convivencia y un botón para bloquear.
 - 😂 Reacciones con emojis que flotan sobre el video.
 - 🎤📷 Silenciar micrófono / apagar cámara (el otro ve el estado), 🔄 cambiar de cámara en el móvil.
 - 🙈 **Modo sin cámara**: entras con un avatar animado.
-- 🚫 Bloquear y pasar: esa persona ya no te vuelve a tocar en la sesión.
+- 🚫 Bloquear (botón sobre el video de cada persona): esa persona ya no te vuelve a tocar en la sesión.
 - 👥 Contador de personas en la sala y cuántas están buscando.
 
 ## Cómo funciona por dentro

@@ -1,44 +1,27 @@
 'use strict';
 /*
- * Chispa — videochat aleatorio por salas.
+ * Chispa — videochat aleatorio por salas, 1 a 1 o en grupos de hasta 8.
  *
  * Cómo funciona (sin servidor propio):
  *  - Cada navegador crea un "peer" con PeerJS (usa el servidor público gratuito de PeerJS
- *    solo para presentarse; el video y el chat viajan directo entre navegadores por WebRTC).
+ *    solo para presentarse; el video y el chat viajan directo entre navegadores por WebRTC,
+ *    o por el TURN configurado en config.js cuando la red no permite conexión directa).
  *  - Por cada sala existe un "anfitrión": el primer navegador que logra reservar el ID
- *    `chispa-v1-<sala>`. Ese navegador hace de emparejador (lobby): lleva la lista de
- *    quién está buscando y los empareja (priorizando intereses en común).
+ *    `chispa-v2-<sala>`. Ese navegador hace de emparejador (lobby): sabe quién busca, con
+ *    cuántas personas quiere hablar (2 a 8) y arma los grupos con quienes eligieron lo mismo.
+ *  - Los grupos empiezan con 2 personas y se van llenando a medida que llegan más.
+ *  - En un grupo todos se conectan con todos (malla): el que llega llama a los que ya estaban.
  *  - Si el anfitrión se va, los demás compiten por reservar el ID y uno nuevo toma el relevo.
  */
 
-const PREFIX = 'chispa-v1-';
+const PREFIX = 'chispa-v2-';
+const MIN_SIZE = 2;
+const MAX_SIZE = 8;
 const STUN_SERVERS = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
 const PEER_OPTS = {
   debug: 1,
   config: { iceServers: [...STUN_SERVERS] },
 };
-
-/* Carga servidores TURN desde config.js (si están configurados). */
-async function loadIceServers() {
-  const cfg = window.CHISPA_CONFIG || {};
-  let turn = Array.isArray(cfg.turnServers) ? cfg.turnServers.filter((s) => s && s.urls) : [];
-  if (cfg.meteredUrl) {
-    try {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 6000);
-      const res = await fetch(cfg.meteredUrl, { signal: ctrl.signal });
-      clearTimeout(t);
-      const list = await res.json();
-      if (Array.isArray(list)) turn = turn.concat(list);
-    } catch (e) {
-      console.warn('No se pudieron cargar los servidores TURN', e);
-    }
-  }
-  state.hasTurn = turn.some((s) => String(s.urls).includes('turn'));
-  PEER_OPTS.config.iceServers = [...STUN_SERVERS, ...turn];
-  console.info(`[Chispa] TURN ${state.hasTurn ? 'activo' : 'NO configurado'}`);
-}
-
 const NETWORK_TIP = 'Tu red podría estar bloqueando la conexión. Prueba con otra red (Wi-Fi ↔ datos móviles) y abre el enlace en Chrome o Safari, no dentro de WhatsApp o Instagram.';
 const EMOJIS = ['👋', '😂', '❤️', '🔥', '👏'];
 const ROMPEHIELOS = [
@@ -64,26 +47,30 @@ const el = {
   inicio: $('#inicio'), app: $('#app'), form: $('#formInicio'),
   inName: $('#inName'), inSala: $('#inSala'), inIntereses: $('#inIntereses'),
   inSoloTexto: $('#inSoloTexto'), verNormas: $('#verNormas'),
+  sizePicker: $('#sizePicker'), sizeHint: $('#sizeHint'), selSize: $('#selSize'),
   lblSala: $('#lblSala'), lblLobby: $('#lblLobby'), lobbyDot: $('#lobbyDot'),
-  remoteVideo: $('#remoteVideo'), localVideo: $('#localVideo'),
+  videos: $('#videos'), tiles: $('#tiles'), localVideo: $('#localVideo'),
   overlay: $('#overlay'), overlayText: $('#overlayText'), overlaySub: $('#overlaySub'), spinner: $('#spinner'),
-  partnerTag: $('#partnerTag'), partnerName: $('#partnerName'), partnerFlags: $('#partnerFlags'), timer: $('#timer'),
+  groupTag: $('#groupTag'), groupLabel: $('#groupLabel'), timer: $('#timer'),
   btnNext: $('#btnNext'), btnStop: $('#btnStop'), btnMic: $('#btnMic'), btnCam: $('#btnCam'),
-  btnFlip: $('#btnFlip'), btnBlock: $('#btnBlock'), btnShare: $('#btnShare'), btnIce: $('#btnIce'),
+  btnFlip: $('#btnFlip'), btnShare: $('#btnShare'), btnIce: $('#btnIce'),
   inAuto: $('#inAuto'), quick: $('#quick'),
   log: $('#log'), typing: $('#typing'), formChat: $('#formChat'), inMsg: $('#inMsg'), btnSend: $('#btnSend'),
-  reactRemote: $('#reactRemote'), reactLocal: $('#reactLocal'),
+  reactLocal: $('#reactLocal'),
   dlgShare: $('#dlgShare'), dlgNormas: $('#dlgNormas'), shareLink: $('#shareLink'), shareSala: $('#shareSala'),
   qr: $('#qr'), btnCopy: $('#btnCopy'), btnNativeShare: $('#btnNativeShare'), toast: $('#toast'),
 };
 
 const state = {
-  name: '', sala: '', interests: [],
+  name: '', sala: '', interests: [], size: 2,
   me: null, meOpened: false,
   lobbyPeer: null, lobby: null, lobbyConn: null, pendingLobby: null, lobbySend: null, lastLobbyMsg: 0,
-  stats: { online: 0, waiting: 0, chatting: 0 },
+  lobbyFails: 0, warnedNetwork: false, failPendingLobby: null,
+  stats: { online: 0, waiting: 0, chatting: 0, sizes: {} },
   audioCtx: null, localStream: null, hasCamera: false, hasMic: false, camOn: true, micOn: true, facing: 'user',
-  partner: null, data: null, call: null, searching: false, connectedAt: 0, lastTypingSent: 0,
+  hasTurn: false,
+  group: null, // { gid, size, peers: Map<id, peer>, startedAt }
+  searching: false, lastTypingSent: 0,
   earlyCalls: new Map(), earlyConns: new Map(),
   blocked: new Set(),
   timers: {},
@@ -98,6 +85,8 @@ function slug(v) {
 }
 const parseInterests = (v) => [...new Set(String(v || '').split(',').map((x) => clean(x, 20).toLowerCase()).filter(Boolean))].slice(0, 8);
 const commonInterests = (a, b) => { const sb = new Set(b); return a.filter((x) => sb.has(x)); };
+const clampSize = (v) => Math.min(MAX_SIZE, Math.max(MIN_SIZE, parseInt(v, 10) || MIN_SIZE));
+const sizeLabel = (n) => (n === 2 ? '1 a 1' : `grupo de ${n}`);
 const safe = (fn) => { try { return fn(); } catch (e) { console.warn(e); } };
 const storeGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
 const storeSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* sin almacenamiento */ } };
@@ -105,6 +94,9 @@ const lobbyId = () => PREFIX + state.sala;
 const PUBLIC_ROOM = 'general';
 const isPublicRoom = () => state.sala === PUBLIC_ROOM;
 const roomLabel = () => (isPublicRoom() ? '🌎 Sala pública' : `#${state.sala}`);
+const getPeer = (id) => (state.group ? state.group.peers.get(id) : undefined);
+const connectedPeers = () => (state.group ? [...state.group.peers.values()].filter((p) => p.connected) : []);
+
 function randomNick() {
   const a = ['Zorro', 'Búho', 'Gato', 'Panda', 'Lobo', 'Delfín', 'Koala', 'Tigre', 'Halcón', 'Pulpo'];
   const b = ['Veloz', 'Curioso', 'Feliz', 'Sabio', 'Audaz', 'Tranqui', 'Brillante', 'Ninja', 'Cósmico', 'Genial'];
@@ -134,24 +126,54 @@ function beep() {
   });
 }
 
+/* Carga servidores TURN desde config.js (si están configurados). */
+async function loadIceServers() {
+  const cfg = window.CHISPA_CONFIG || {};
+  let turn = Array.isArray(cfg.turnServers) ? cfg.turnServers.filter((s) => s && s.urls) : [];
+  if (cfg.meteredUrl) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 6000);
+      const res = await fetch(cfg.meteredUrl, { signal: ctrl.signal });
+      clearTimeout(t);
+      const list = await res.json();
+      if (Array.isArray(list)) turn = turn.concat(list);
+    } catch (e) {
+      console.warn('No se pudieron cargar los servidores TURN', e);
+    }
+  }
+  state.hasTurn = turn.some((s) => String(s.urls).includes('turn'));
+  PEER_OPTS.config.iceServers = [...STUN_SERVERS, ...turn];
+  console.info(`[Chispa] TURN ${state.hasTurn ? 'activo' : 'NO configurado'}`);
+}
+
 /* ================= Emparejador (solo corre en el anfitrión) ================= */
 class Lobby {
   constructor() {
     this.clients = new Map();
+    this.groups = new Map();
     this.timer = setInterval(() => this.tick(), 3000);
   }
+
   add(id, send, ref) {
-    this.clients.set(id, {
-      id, send, ref, name: 'Anónimo', interests: [], status: 'idle',
-      blocked: new Set(), last: null, waitingSince: 0, seen: Date.now(),
-    });
+    const c = this.clients.get(id) || {
+      id, name: 'Anónimo', interests: [], size: MIN_SIZE, status: 'idle',
+      gid: null, lastGroup: null, blocked: new Set(), waitingSince: 0,
+    };
+    c.send = send; c.ref = ref; c.seen = Date.now();
+    this.clients.set(id, c);
   }
+
   remove(id, ref) {
     const c = this.clients.get(id);
     if (!c || (ref && c.ref !== ref)) return;
     this.clients.delete(id);
-    this.broadcastStats();
+    this.leaveGroup(c);
+    this.update();
   }
+
+  info(c) { return { id: c.id, name: c.name, interests: c.interests }; }
+
   msg(id, m) {
     const c = this.clients.get(id);
     if (!c || !m || typeof m !== 'object') return;
@@ -160,67 +182,158 @@ class Lobby {
       case 'hello':
         c.name = clean(m.name, 24) || 'Anónimo';
         c.interests = Array.isArray(m.interests) ? parseInterests(m.interests.join(',')) : [];
+        c.size = clampSize(m.size);
         if (Array.isArray(m.blocked)) m.blocked.slice(0, 50).forEach((b) => typeof b === 'string' && c.blocked.add(b));
-        c.status = m.status === 'busy' ? 'busy' : 'idle';
-        if (m.status === 'waiting') this.setWaiting(c);
-        this.broadcastStats();
+        if (m.status === 'busy' && typeof m.gid === 'string') this.restoreMember(c, m.gid, clampSize(m.groupSize));
+        else if (m.status === 'waiting') { this.leaveGroup(c); this.setWaiting(c); }
+        else { this.leaveGroup(c); c.status = 'idle'; }
+        this.update();
         break;
-      case 'find': this.setWaiting(c); this.broadcastStats(); break;
-      case 'stop': c.status = 'idle'; this.broadcastStats(); break;
-      case 'block': if (typeof m.who === 'string') c.blocked.add(m.who); break;
+      case 'find':
+        this.leaveGroup(c);
+        c.size = clampSize(m.size);
+        this.setWaiting(c);
+        this.update();
+        break;
+      case 'stop':
+        this.leaveGroup(c);
+        c.status = 'idle';
+        this.update();
+        break;
+      case 'size':
+        c.size = clampSize(m.size);
+        this.update();
+        break;
+      case 'block':
+        if (typeof m.who === 'string') c.blocked.add(m.who);
+        break;
       case 'ping':
-        safe(() => c.send({ type: 'stats', ...this.stats() }));
+        safe(() => c.send({ type: 'stats', ...this.stats(c) }));
         // Los temporizadores se frenan en pestañas en segundo plano; los pings llegan por la red
         // y no se frenan, así que aprovechamos para reintentar el emparejamiento.
-        if (c.status === 'waiting') this.tryMatch(c);
+        if (c.status === 'waiting') this.placeAll();
         break;
     }
   }
+
   setWaiting(c) {
     c.status = 'waiting';
     c.waitingSince = Date.now();
-    this.tryMatch(c);
   }
+
+  // Tras un cambio de anfitrión, cada miembro avisa en qué grupo estaba y se reconstruye.
+  restoreMember(c, gid, size) {
+    let g = this.groups.get(gid);
+    if (!g) { g = { id: gid, size, members: new Set(), changed: Date.now() }; this.groups.set(gid, g); }
+    g.members.add(c.id);
+    c.gid = gid; c.status = 'busy'; c.size = g.size;
+  }
+
+  leaveGroup(c) {
+    if (!c.gid) return;
+    const gid = c.gid;
+    const g = this.groups.get(gid);
+    c.gid = null; c.lastGroup = gid;
+    if (!g) return;
+    g.members.delete(c.id);
+    g.changed = Date.now();
+    for (const mid of g.members) {
+      const m = this.clients.get(mid);
+      if (m) safe(() => m.send({ type: 'left', gid, id: c.id }));
+    }
+    if (g.members.size <= 1) this.dissolve(g);
+  }
+
+  // Si en un grupo queda una sola persona, el grupo se disuelve y esa persona vuelve a buscar.
+  dissolve(g) {
+    this.groups.delete(g.id);
+    for (const mid of g.members) {
+      const m = this.clients.get(mid);
+      if (!m) continue;
+      m.gid = null; m.lastGroup = g.id;
+      this.setWaiting(m);
+      safe(() => m.send({ type: 'alone', gid: g.id }));
+    }
+  }
+
+  blockedBetween(a, b) { return a.blocked.has(b.id) || b.blocked.has(a.id); }
+
+  place(c) {
+    if (c.status !== 'waiting') return;
+    const now = Date.now();
+    const patient = now - c.waitingSince > 8000;
+    let best = null, bestScore = -Infinity;
+
+    // 1) Grupos abiertos del mismo tamaño (se prefieren para que se vayan llenando).
+    for (const g of this.groups.values()) {
+      if (g.size !== c.size || g.members.size >= g.size) continue;
+      if (g.id === c.lastGroup && !patient) continue;
+      const members = [...g.members].map((id) => this.clients.get(id)).filter(Boolean);
+      if (members.some((m) => this.blockedBetween(c, m))) continue;
+      const common = new Set(members.flatMap((m) => commonInterests(c.interests, m.interests))).size;
+      const score = 100 + g.members.size * 5 + common * 10 + Math.random();
+      if (score > bestScore) { best = { g }; bestScore = score; }
+    }
+    // 2) Otra persona esperando con el mismo tamaño elegido → grupo nuevo.
+    for (const b of this.clients.values()) {
+      if (b === c || b.status !== 'waiting' || b.size !== c.size || this.blockedBetween(c, b)) continue;
+      const recent = c.lastGroup && b.lastGroup === c.lastGroup;
+      if (recent && (!patient || now - b.waitingSince < 8000)) continue;
+      const score = commonInterests(c.interests, b.interests).length * 10 + Math.random() - (recent ? 50 : 0);
+      if (score > bestScore) { best = { b }; bestScore = score; }
+    }
+    if (!best) return;
+    if (best.g) this.join(c, best.g);
+    else this.create(c, best.b);
+  }
+
+  create(a, b) {
+    const g = { id: `g${Math.random().toString(36).slice(2, 10)}`, size: a.size, members: new Set([a.id, b.id]), changed: Date.now() };
+    this.groups.set(g.id, g);
+    a.status = b.status = 'busy';
+    a.gid = b.gid = g.id;
+    safe(() => a.send({ type: 'group', gid: g.id, size: g.size, members: [this.info(b)], connectTo: [b.id] }));
+    safe(() => b.send({ type: 'group', gid: g.id, size: g.size, members: [this.info(a)], connectTo: [] }));
+  }
+
+  join(c, g) {
+    const others = [...g.members].map((id) => this.clients.get(id)).filter(Boolean);
+    g.members.add(c.id);
+    g.changed = Date.now();
+    c.status = 'busy'; c.gid = g.id;
+    safe(() => c.send({ type: 'group', gid: g.id, size: g.size, members: others.map((m) => this.info(m)), connectTo: others.map((m) => m.id) }));
+    for (const m of others) safe(() => m.send({ type: 'join', gid: g.id, member: this.info(c) }));
+  }
+
+  placeAll() { for (const c of [...this.clients.values()]) this.place(c); }
+
+  update() { this.placeAll(); this.broadcastStats(); }
+
   stats() {
     let online = 0, waiting = 0, chatting = 0;
+    const sizes = {};
     for (const c of this.clients.values()) {
       online++;
       if (c.status === 'waiting') waiting++;
       if (c.status === 'busy') chatting++;
+      sizes[c.size] = (sizes[c.size] || 0) + 1;
     }
-    return { online, waiting, chatting };
+    return { online, waiting, chatting, sizes };
   }
+
   broadcastStats() {
     const s = { type: 'stats', ...this.stats() };
     for (const c of this.clients.values()) safe(() => c.send(s));
   }
-  tryMatch(a) {
-    if (a.status !== 'waiting') return;
-    const now = Date.now();
-    let best = null, bestScore = -Infinity;
-    for (const b of this.clients.values()) {
-      if (b === a || b.status !== 'waiting') continue;
-      if (a.blocked.has(b.id) || b.blocked.has(a.id)) continue;
-      // Evita repetir con la última persona, salvo que ambos lleven rato esperando.
-      const repeat = a.last === b.id || b.last === a.id;
-      if (repeat && (now - a.waitingSince < 8000 || now - b.waitingSince < 8000)) continue;
-      const score = commonInterests(a.interests, b.interests).length * 10 + Math.random() - (repeat ? 100 : 0);
-      if (score > bestScore) { best = b; bestScore = score; }
-    }
-    if (!best) return;
-    const common = commonInterests(a.interests, best.interests);
-    a.status = best.status = 'busy';
-    a.last = best.id; best.last = a.id;
-    safe(() => a.send({ type: 'match', partner: best.id, name: best.name, common, initiator: true }));
-    safe(() => best.send({ type: 'match', partner: a.id, name: a.name, common, initiator: false }));
-    this.broadcastStats();
-  }
+
   tick() {
     const now = Date.now();
     for (const c of [...this.clients.values()]) if (now - c.seen > 20000) this.remove(c.id);
-    for (const c of this.clients.values()) this.tryMatch(c);
+    for (const g of [...this.groups.values()]) if (g.members.size <= 1 && now - g.changed > 15000) this.dissolve(g);
+    this.update();
   }
-  destroy() { clearInterval(this.timer); this.clients.clear(); }
+
+  destroy() { clearInterval(this.timer); this.clients.clear(); this.groups.clear(); }
 }
 
 /* ================= Conexión a la sala ================= */
@@ -229,14 +342,16 @@ function setLobbyState(text, ok = false) {
   el.lobbyDot.classList.toggle('ok', ok);
 }
 
+function sameSizeCount() { return (state.stats.sizes && state.stats.sizes[state.size]) || 0; }
+
 function renderStats() {
-  const { online, waiting } = state.stats;
+  const { online } = state.stats;
   const host = state.lobby ? ' · 👑' : '';
-  setLobbyState(`${online} en la sala · ${waiting} buscando${host}`, true);
+  setLobbyState(`${online} en la sala · ${sameSizeCount()} en ${sizeLabel(state.size)}${host}`, true);
   el.lblLobby.parentElement.title = state.lobby
     ? 'Tu navegador está haciendo de anfitrión de esta sala'
     : 'Conectado a la sala';
-  if (state.searching && !state.partner) updateSearchingHint();
+  if (state.searching && !state.group) updateSearchingHint();
 }
 
 function lobbySend(m) { if (state.lobbySend) state.lobbySend(m); }
@@ -249,7 +364,7 @@ function retryLobby() {
 function connectLobby() {
   clearTimeout(state.timers.lobbyRetry);
   if (state.lobbySend || state.pendingLobby || !state.me || state.me.destroyed) return;
-  setLobbyState('Conectando a la sala…');
+  if (!state.lobbyFails) setLobbyState('Conectando a la sala…');
   const lp = new Peer(lobbyId(), PEER_OPTS);
   let settled = false;
   lp.on('open', () => { settled = true; becomeHost(lp); });
@@ -269,6 +384,7 @@ function connectLobby() {
 function becomeHost(lp) {
   state.lobbyPeer = lp;
   state.lobby = new Lobby();
+  state.lobbyFails = 0;
   lp.on('connection', (conn) => {
     conn.on('open', () => state.lobby && state.lobby.add(conn.peer, (d) => { if (conn.open) conn.send(d); }, conn));
     conn.on('data', (m) => state.lobby && state.lobby.msg(conn.peer, m));
@@ -279,7 +395,7 @@ function becomeHost(lp) {
   lp.on('close', () => demoteHost(lp));
 
   const myId = state.me.id;
-  // Mensajes locales (el anfitrión también es participante). queueMicrotask no se frena en segundo plano.
+  // Mensajes locales (el anfitrión también participa). queueMicrotask no se frena en segundo plano.
   state.lobby.add(myId, (d) => queueMicrotask(() => onLobbyMsg(d)), 'self');
   state.lobbySend = (m) => queueMicrotask(() => state.lobby && state.lobby.msg(myId, m));
   onLobbyReady();
@@ -300,7 +416,7 @@ function joinLobbyAsClient() {
     if (state.pendingLobby !== conn) return;
     state.pendingLobby = null;
     safe(() => conn.close());
-    state.lobbyFails = (state.lobbyFails || 0) + 1;
+    state.lobbyFails++;
     if (state.lobbyFails >= 2) {
       setLobbyState('No logramos entrar a la sala, reintentando…');
       if (!state.warnedNetwork) { state.warnedNetwork = true; toast(NETWORK_TIP, 9000); }
@@ -336,9 +452,11 @@ function dropLobbyConn() {
 }
 
 function onLobbyReady() {
+  const g = state.group;
   lobbySend({
-    type: 'hello', name: state.name, interests: state.interests, blocked: [...state.blocked],
-    status: state.partner ? 'busy' : state.searching ? 'waiting' : 'idle',
+    type: 'hello', name: state.name, interests: state.interests, blocked: [...state.blocked], size: state.size,
+    status: g ? 'busy' : state.searching ? 'waiting' : 'idle',
+    gid: g ? g.gid : null, groupSize: g ? g.size : null,
   });
   lobbySend({ type: 'ping' });
   if (!state.timers.ping) {
@@ -352,13 +470,18 @@ function onLobbyReady() {
 function onLobbyMsg(m) {
   if (!m || typeof m !== 'object') return;
   state.lastLobbyMsg = Date.now();
-  if (m.type === 'stats') {
-    state.stats = { online: m.online | 0, waiting: m.waiting | 0, chatting: m.chatting | 0 };
-    renderStats();
-  } else if (m.type === 'match') {
-    if (!state.searching || state.partner || typeof m.partner !== 'string') return;
-    if (state.blocked.has(m.partner)) { lobbySend({ type: 'find' }); return; }
-    startWithPartner(m);
+  switch (m.type) {
+    case 'stats':
+      state.stats = {
+        online: m.online | 0, waiting: m.waiting | 0, chatting: m.chatting | 0,
+        sizes: m.sizes && typeof m.sizes === 'object' ? m.sizes : {},
+      };
+      renderStats();
+      break;
+    case 'group': onGroup(m); break;
+    case 'join': onJoin(m); break;
+    case 'left': onLeft(m); break;
+    case 'alone': onAlone(m); break;
   }
 }
 
@@ -375,8 +498,10 @@ function initPeer() {
     console.warn('peer error', err.type, err.message);
     const msg = String(err.message || '');
     if (err.type === 'peer-unavailable') {
-      if (msg.includes(lobbyId()) && state.failPendingLobby) state.failPendingLobby();
-      else if (state.partner && msg.includes(state.partner.id)) partnerLeft('No se pudo conectar con esa persona 😕');
+      if (msg.includes(lobbyId()) && state.failPendingLobby) { state.failPendingLobby(); return; }
+      for (const p of state.group ? [...state.group.peers.values()] : []) {
+        if (msg.includes(p.id)) dropPeer(p.id, `No se pudo conectar con ${p.name} 😕`, true);
+      }
       return;
     }
     if (err.type === 'browser-incompatible') { alert('Tu navegador no soporta videollamadas WebRTC. Prueba con Chrome, Edge, Firefox o Safari actualizados.'); return; }
@@ -464,11 +589,24 @@ function makeSilentTrack() {
   }) || null;
 }
 
+// En grupos grandes cada uno envía su video a todos: bajamos la calidad para que alcance la conexión.
+function adjustQuality() {
+  if (!state.hasCamera || !state.group) return;
+  const track = state.localStream.getVideoTracks()[0];
+  if (!track || !track.applyConstraints) return;
+  const small = state.group.size >= 4;
+  track.applyConstraints(small
+    ? { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 15 } }
+    : { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } }).catch(() => {});
+}
+
 function replaceSenderTrack(track) {
-  const pc = state.call && state.call.peerConnection;
-  if (!pc) return;
-  const sender = pc.getSenders().find((s) => s.track && s.track.kind === track.kind);
-  if (sender) sender.replaceTrack(track).catch(() => {});
+  for (const p of state.group ? state.group.peers.values() : []) {
+    const pc = p.call && p.call.peerConnection;
+    if (!pc) continue;
+    const sender = pc.getSenders().find((s) => s.track && s.track.kind === track.kind);
+    if (sender) sender.replaceTrack(track).catch(() => {});
+  }
 }
 
 async function flipCamera() {
@@ -485,6 +623,7 @@ async function flipCamera() {
     el.localVideo.srcObject = state.localStream;
     el.localVideo.classList.toggle('mirror', state.facing === 'user');
     replaceSenderTrack(nt);
+    adjustQuality();
   } catch (e) {
     console.warn(e);
     state.facing = prev;
@@ -498,7 +637,7 @@ function toggleMic() {
   el.btnMic.classList.toggle('off', !state.micOn);
   el.btnMic.textContent = state.micOn ? '🎤' : '🔇';
   el.btnMic.title = state.micOn ? 'Silenciar micrófono' : 'Activar micrófono';
-  sendMediaState();
+  sendAll(mediaState());
 }
 
 function toggleCam() {
@@ -506,38 +645,79 @@ function toggleCam() {
   state.localStream.getVideoTracks().forEach((t) => { t.enabled = state.camOn; });
   el.btnCam.classList.toggle('off', !state.camOn);
   el.btnCam.title = state.camOn ? 'Apagar cámara' : 'Encender cámara';
-  sendMediaState();
+  sendAll(mediaState());
 }
 
-function sendMediaState() {
-  sendPeer({ t: 'state', cam: state.hasCamera && state.camOn, mic: state.hasMic && state.micOn });
-}
+const mediaState = () => ({ t: 'state', cam: state.hasCamera && state.camOn, mic: state.hasMic && state.micOn });
 
-/* ================= Emparejamiento con otra persona ================= */
-function startWithPartner(m) {
+/* ================= Grupo: conexiones con cada persona ================= */
+function onGroup(m) {
+  if (typeof m.gid !== 'string' || !Array.isArray(m.members)) return;
+  if (state.group) return;
+  if (!state.searching) { lobbySend({ type: 'stop' }); return; }
   state.searching = false;
-  clearTimeout(state.timers.alone);
-  state.partner = {
-    id: m.partner, name: clean(m.name, 24) || 'Anónimo',
-    common: Array.isArray(m.common) ? m.common.map((x) => clean(x, 20)).slice(0, 8) : [],
-  };
-  setUI('connecting');
-  state.timers.connect = setTimeout(() => {
-    if (!state.data || !state.data.open) {
-      partnerLeft('No se pudo conectar 😕 Buscando a otra persona…');
-      if (!state.hasTurn) addMsg('sys', NETWORK_TIP);
-    }
-  }, 12000);
-
-  if (m.initiator) {
-    setupData(state.me.connect(m.partner, { reliable: true }));
-    setupCall(state.me.call(m.partner, state.localStream));
-  } else {
-    const conn = state.earlyConns.get(m.partner);
-    if (conn) { state.earlyConns.delete(m.partner); setupData(conn); }
-    const call = state.earlyCalls.get(m.partner);
-    if (call) { state.earlyCalls.delete(m.partner); answerCall(call); }
+  state.group = { gid: m.gid, size: clampSize(m.size), peers: new Map(), startedAt: 0 };
+  el.log.replaceChildren();
+  addMsg('sys', state.group.size === 2
+    ? 'Conectando con alguien nuevo…'
+    : `Entraste a un ${sizeLabel(state.group.size)}. Irán llegando más personas a medida que se conecten.`);
+  const connectTo = new Set(Array.isArray(m.connectTo) ? m.connectTo : []);
+  for (const mem of m.members) {
+    const p = addPeer(mem);
+    if (!p) continue;
+    if (connectTo.has(p.id)) dialPeer(p);
+    else attachEarly(p);
   }
+  adjustQuality();
+  setUI('group');
+}
+
+function onJoin(m) {
+  if (!state.group || m.gid !== state.group.gid || !m.member) return;
+  const p = addPeer(m.member);
+  if (p) attachEarly(p);
+  setUI('group');
+}
+
+function onLeft(m) {
+  if (!state.group || m.gid !== state.group.gid) return;
+  const p = getPeer(m.id);
+  if (p) dropPeer(p.id, `${p.name} salió 👋`);
+}
+
+function onAlone(m) {
+  if (!state.group || m.gid !== state.group.gid) return;
+  groupEnded(state.group.size === 2 ? 'Tu compañero se fue 👋' : 'Todos los demás salieron del grupo 👋', true);
+}
+
+function addPeer(mem) {
+  if (!state.group || !mem || typeof mem.id !== 'string' || mem.id === state.me.id) return null;
+  if (state.group.peers.has(mem.id)) return null;
+  const p = {
+    id: mem.id,
+    name: clean(mem.name, 24) || 'Anónimo',
+    interests: Array.isArray(mem.interests) ? parseInterests(mem.interests.join(',')) : [],
+    data: null, call: null, connected: false,
+  };
+  p.tile = createTile(p);
+  state.group.peers.set(p.id, p);
+  p.timer = setTimeout(() => {
+    if (!p.connected) dropPeer(p.id, `No se pudo conectar con ${p.name} 😕`, true);
+  }, 15000);
+  renderTiles();
+  return p;
+}
+
+function dialPeer(p) {
+  setupData(p, state.me.connect(p.id, { reliable: true }));
+  setupCall(p, state.me.call(p.id, state.localStream));
+}
+
+function attachEarly(p) {
+  const conn = state.earlyConns.get(p.id);
+  if (conn) { state.earlyConns.delete(p.id); setupData(p, conn); }
+  const call = state.earlyCalls.get(p.id);
+  if (call) { state.earlyCalls.delete(p.id); answerCall(p, call); }
 }
 
 function stashEarly(map, obj) {
@@ -550,132 +730,112 @@ function stashEarly(map, obj) {
 }
 
 function onIncomingConn(conn) {
-  if (state.partner && conn.peer === state.partner.id && !state.data) setupData(conn);
+  const p = getPeer(conn.peer);
+  if (p && !p.data) setupData(p, conn);
   else stashEarly(state.earlyConns, conn);
 }
 
 function onIncomingCall(call) {
-  if (state.partner && call.peer === state.partner.id && !state.call) answerCall(call);
+  const p = getPeer(call.peer);
+  if (p && !p.call) answerCall(p, call);
   else stashEarly(state.earlyCalls, call);
 }
 
-function answerCall(call) {
+function answerCall(p, call) {
   call.answer(state.localStream);
-  setupCall(call);
+  setupCall(p, call);
 }
 
-function setupCall(call) {
+function setupCall(p, call) {
   if (!call) return;
-  state.call = call;
+  p.call = call;
   call.on('stream', (stream) => {
-    if (state.call !== call) return;
-    el.remoteVideo.srcObject = stream;
-    el.remoteVideo.play().catch(() => {});
+    if (p.call !== call || getPeer(p.id) !== p) return;
+    p.tile.video.srcObject = stream;
+    p.tile.video.play().catch(() => {});
   });
   call.on('error', (e) => console.warn('call error', e));
 }
 
-function setupData(conn) {
+function setupData(p, conn) {
   if (!conn) return;
-  state.data = conn;
+  p.data = conn;
   const onOpen = () => {
-    if (state.data !== conn) return;
-    clearTimeout(state.timers.connect);
-    conn.send({ t: 'hello', name: state.name, interests: state.interests });
-    sendMediaState();
-    onConnected();
+    if (getPeer(p.id) !== p || p.data !== conn || p.connected) return;
+    p.connected = true;
+    clearTimeout(p.timer);
+    safe(() => conn.send({ t: 'hello', name: state.name, interests: state.interests }));
+    safe(() => conn.send(mediaState()));
+    onPeerConnected(p);
   };
   if (conn.open) onOpen(); else conn.on('open', onOpen);
-  conn.on('data', (d) => { if (state.data === conn) onPeerData(d); });
-  conn.on('close', () => { if (state.data === conn) partnerLeft('Tu compañero se fue 👋'); });
+  conn.on('data', (d) => { if (p.data === conn && getPeer(p.id) === p) onPeerData(p, d); });
+  conn.on('close', () => { if (p.data === conn && getPeer(p.id) === p) dropPeer(p.id, `${p.name} salió 👋`); });
   conn.on('error', (e) => console.warn('data error', e));
 }
 
-function onConnected() {
-  state.connectedAt = Date.now();
-  el.log.replaceChildren();
-  const p = state.partner;
-  addMsg('sys', `Estás hablando con ${p.name}. ¡Saluda! 👋`);
-  if (p.common.length) addMsg('sys', `Tienen en común: ${p.common.join(', ')} ✨`);
-  setUI('connected');
-  beep();
-  clearInterval(state.timers.clock);
-  state.timers.clock = setInterval(updateClock, 1000);
-  updateClock();
-  if (matchMedia('(pointer: fine)').matches) el.inMsg.focus();
-}
-
-function updateClock() {
-  if (!state.connectedAt) return;
-  const s = Math.floor((Date.now() - state.connectedAt) / 1000);
-  el.timer.textContent = `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
-}
-
-function onPeerData(d) {
-  if (!d || typeof d !== 'object') return;
-  switch (d.t) {
-    case 'hello':
-      if (state.partner) {
-        const n = clean(d.name, 24);
-        if (n) { state.partner.name = n; el.partnerName.textContent = n; }
-      }
-      break;
-    case 'msg': {
-      const text = clean(d.text, 500);
-      if (text) { addMsg('them', text); el.typing.classList.add('hidden'); }
-      break;
-    }
-    case 'typing':
-      el.typing.classList.remove('hidden');
-      clearTimeout(state.timers.typing);
-      state.timers.typing = setTimeout(() => el.typing.classList.add('hidden'), 2500);
-      break;
-    case 'react':
-      if (EMOJIS.includes(d.e)) floatEmoji(el.reactRemote, d.e);
-      break;
-    case 'ice':
-      if (Number.isInteger(d.i) && ROMPEHIELOS[d.i]) addMsg('ice', `🎲 ${ROMPEHIELOS[d.i]}`);
-      break;
-    case 'state': {
-      const flags = [];
-      if (!d.mic) flags.push('🔇');
-      if (!d.cam) flags.push('🚫📷');
-      el.partnerFlags.textContent = flags.join(' ');
-      break;
-    }
-    case 'bye':
-      partnerLeft('Tu compañero pasó a la siguiente persona 👋');
-      break;
+function onPeerConnected(p) {
+  const g = state.group;
+  if (!g.startedAt) {
+    g.startedAt = Date.now();
+    clearInterval(state.timers.clock);
+    state.timers.clock = setInterval(updateClock, 1000);
+    updateClock();
+    if (matchMedia('(pointer: fine)').matches) el.inMsg.focus();
   }
+  const common = commonInterests(state.interests, p.interests);
+  addMsg('sys', `👋 ${p.name} ${g.size === 2 ? 'está contigo. ¡Saluda!' : 'se unió al grupo.'}${common.length ? ` En común: ${common.join(', ')} ✨` : ''}`);
+  beep();
+  updateTile(p);
+  setUI('group');
 }
 
-function sendPeer(obj) {
-  if (state.data && state.data.open) { safe(() => state.data.send(obj)); return true; }
-  return false;
+function dropPeer(id, reason, failed) {
+  const g = state.group;
+  const p = g && g.peers.get(id);
+  if (!p) return;
+  g.peers.delete(id);
+  clearTimeout(p.timer);
+  safe(() => p.data && p.data.close());
+  safe(() => p.call && p.call.close());
+  p.tile.el.remove();
+  renderTiles();
+  if (reason) addMsg('sys', reason);
+  if (failed && !state.hasTurn) addMsg('sys', NETWORK_TIP);
+  if (g.peers.size === 0) groupEnded('', false);
+  else setUI('group');
 }
 
-function cleanupPartner(sendBye) {
-  ['connect', 'auto', 'typing'].forEach((k) => clearTimeout(state.timers[k]));
+// Sale del grupo localmente (cierra todas las conexiones).
+function leaveGroupLocal(sendBye) {
+  const g = state.group;
+  if (!g) return;
+  state.group = null;
   clearInterval(state.timers.clock);
-  const { data, call } = state;
-  if (sendBye && data && data.open) safe(() => data.send({ t: 'bye' }));
-  state.data = null; state.call = null; state.partner = null; state.connectedAt = 0;
-  setTimeout(() => { safe(() => data && data.close()); safe(() => call && call.close()); }, sendBye ? 300 : 0);
-  el.remoteVideo.srcObject = null;
+  clearTimeout(state.timers.typing);
+  for (const p of g.peers.values()) {
+    clearTimeout(p.timer);
+    if (sendBye && p.data && p.data.open) safe(() => p.data.send({ t: 'bye' }));
+    setTimeout(() => { safe(() => p.data && p.data.close()); safe(() => p.call && p.call.close()); }, sendBye ? 300 : 0);
+  }
+  el.tiles.replaceChildren();
+  renderTiles();
   el.typing.classList.add('hidden');
-  el.partnerFlags.textContent = '';
 }
 
-function partnerLeft(reason) {
-  if (!state.partner) return;
-  cleanupPartner(false);
-  addMsg('sys', reason);
+// El grupo terminó (todos se fueron). Según "Auto", buscamos otro o nos detenemos.
+function groupEnded(reason, lobbyAlreadyWaiting) {
+  leaveGroupLocal(false);
+  if (reason) addMsg('sys', reason);
   if (el.inAuto.checked) {
     state.searching = true;
     setUI('searching');
-    state.timers.auto = setTimeout(() => {
-      if (state.searching && !state.partner) lobbySend({ type: 'find' });
-    }, 1500);
+    clearTimeout(state.timers.auto);
+    if (!lobbyAlreadyWaiting) {
+      state.timers.auto = setTimeout(() => {
+        if (state.searching && !state.group) lobbySend({ type: 'find', size: state.size });
+      }, 1200);
+    }
   } else {
     state.searching = false;
     setUI('idle');
@@ -685,71 +845,176 @@ function partnerLeft(reason) {
 
 function find() {
   if (!state.me) return;
-  cleanupPartner(true);
+  clearTimeout(state.timers.auto);
+  leaveGroupLocal(true);
   state.searching = true;
   setUI('searching');
-  lobbySend({ type: 'find' });
+  lobbySend({ type: 'find', size: state.size });
 }
 
 function stop() {
-  cleanupPartner(true);
+  clearTimeout(state.timers.auto);
+  leaveGroupLocal(true);
   state.searching = false;
   setUI('idle');
   lobbySend({ type: 'stop' });
 }
 
-function blockPartner() {
-  const p = state.partner;
+function blockPeer(id) {
+  const p = getPeer(id);
   if (!p) return;
-  if (!confirm(`¿Bloquear a ${p.name}? No volverá a tocarte en esta sesión.`)) return;
+  if (!confirm(`¿Bloquear a ${p.name}? No volverá a tocarte en esta sesión y saldrás de esta conversación.`)) return;
   state.blocked.add(p.id);
   lobbySend({ type: 'block', who: p.id });
-  addMsg('sys', `Bloqueaste a ${p.name}.`);
+  const name = p.name;
   find();
+  addMsg('sys', `Bloqueaste a ${name}.`);
+}
+
+function sendAll(obj) {
+  let n = 0;
+  for (const p of connectedPeers()) {
+    if (p.data && p.data.open) { safe(() => p.data.send(obj)); n++; }
+  }
+  return n > 0;
+}
+
+function onPeerData(p, d) {
+  if (!d || typeof d !== 'object') return;
+  switch (d.t) {
+    case 'hello': {
+      const n = clean(d.name, 24);
+      if (n) { p.name = n; updateTile(p); }
+      break;
+    }
+    case 'msg': {
+      const text = clean(d.text, 500);
+      if (text) { addMsg('them', text, p.name); el.typing.classList.add('hidden'); }
+      break;
+    }
+    case 'typing':
+      el.typing.textContent = `${p.name} está escribiendo…`;
+      el.typing.classList.remove('hidden');
+      clearTimeout(state.timers.typing);
+      state.timers.typing = setTimeout(() => el.typing.classList.add('hidden'), 2500);
+      break;
+    case 'react':
+      if (EMOJIS.includes(d.e)) floatEmoji(p.tile.reactions, d.e);
+      break;
+    case 'ice':
+      if (Number.isInteger(d.i) && ROMPEHIELOS[d.i]) addMsg('ice', `🎲 ${p.name}: ${ROMPEHIELOS[d.i]}`);
+      break;
+    case 'state': {
+      const flags = [];
+      if (!d.mic) flags.push('🔇');
+      if (!d.cam) flags.push('🚫📷');
+      p.tile.flags.textContent = flags.join(' ');
+      break;
+    }
+    case 'bye':
+      dropPeer(p.id, `${p.name} salió 👋`);
+      break;
+  }
 }
 
 /* ================= Interfaz ================= */
+function createTile(p) {
+  const wrap = document.createElement('div');
+  wrap.className = 'tile connecting';
+  const video = document.createElement('video');
+  video.autoplay = true;
+  video.playsInline = true;
+  const wait = document.createElement('div');
+  wait.className = 'tile-wait';
+  const sp = document.createElement('div');
+  sp.className = 'spinner small';
+  const wt = document.createElement('span');
+  wt.textContent = 'Conectando…';
+  wait.append(sp, wt);
+  const label = document.createElement('div');
+  label.className = 'tile-label';
+  const nameEl = document.createElement('b');
+  nameEl.textContent = p.name;
+  const flags = document.createElement('span');
+  label.append(nameEl, flags);
+  const block = document.createElement('button');
+  block.type = 'button';
+  block.className = 'tile-block';
+  block.title = `Bloquear a ${p.name}`;
+  block.textContent = '🚫';
+  block.addEventListener('click', () => blockPeer(p.id));
+  const reactions = document.createElement('div');
+  reactions.className = 'reactions';
+  wrap.append(video, wait, label, block, reactions);
+  el.tiles.append(wrap);
+  return { el: wrap, video, nameEl, flags, reactions };
+}
+
+function updateTile(p) {
+  p.tile.el.classList.toggle('connecting', !p.connected);
+  p.tile.nameEl.textContent = p.name;
+}
+
+function renderTiles() {
+  const n = el.tiles.children.length;
+  el.tiles.className = `tiles n${Math.min(n, 7)}`;
+  el.videos.classList.toggle('many', n >= 3);
+  const g = state.group;
+  if (g) {
+    const here = connectedPeers().length + 1;
+    el.groupLabel.textContent = g.size === 2 ? '1 a 1' : `👥 ${here}/${g.size}`;
+    el.groupTag.title = g.size === 2 ? '' : `${here} de ${g.size} personas conectadas`;
+  }
+}
+
+function updateClock() {
+  const g = state.group;
+  if (!g || !g.startedAt) return;
+  const s = Math.floor((Date.now() - g.startedAt) / 1000);
+  el.timer.textContent = `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+}
+
 function updateSearchingHint() {
-  const others = Math.max(0, state.stats.online - 1);
+  const others = Math.max(0, sameSizeCount() - 1);
+  const mode = sizeLabel(state.size);
   el.overlaySub.textContent = others === 0
-    ? 'Por ahora estás solo en la sala. ¡Invita a alguien con el botón 🔗 Invitar!'
-    : `Hay ${others} persona${others === 1 ? '' : 's'} más en la sala.`;
+    ? `Nadie más eligió ${mode} por ahora. Invita a alguien con 🔗 Invitar o cambia el número de personas.`
+    : `Hay ${others} persona${others === 1 ? '' : 's'} más con tu mismo ajuste (${mode}).`;
 }
 
 function setUI(mode) {
-  const connected = mode === 'connected';
-  el.overlay.classList.toggle('hidden', connected);
+  const inGroup = mode === 'group';
+  const live = inGroup && connectedPeers().length > 0;
+  el.overlay.classList.toggle('hidden', inGroup);
   el.spinner.classList.toggle('hidden', mode === 'idle');
-  el.partnerTag.classList.toggle('hidden', !connected);
+  el.groupTag.classList.toggle('hidden', !inGroup);
   el.btnStop.disabled = mode === 'idle';
-  el.btnBlock.disabled = !connected;
-  el.inMsg.disabled = el.btnSend.disabled = !connected;
-  el.quick.querySelectorAll('button').forEach((b) => { b.disabled = !connected; });
+  el.inMsg.disabled = el.btnSend.disabled = !live;
+  el.quick.querySelectorAll('button').forEach((b) => { b.disabled = !live; });
   el.btnNext.textContent = mode === 'idle' ? '▶ Empezar' : '⏭ Siguiente';
   el.overlaySub.textContent = '';
   if (mode === 'idle') {
     el.overlayText.innerHTML = 'Pulsa <b>Empezar</b> para conocer a alguien';
   } else if (mode === 'searching') {
+    const who = state.size === 2 ? 'a alguien' : `un ${sizeLabel(state.size)}`;
     el.overlayText.textContent = isPublicRoom()
-      ? 'Buscando a alguien al azar en la sala pública…'
-      : `Buscando a alguien en #${state.sala}…`;
+      ? `Buscando ${who} al azar en la sala pública…`
+      : `Buscando ${who} en #${state.sala}…`;
     updateSearchingHint();
-  } else if (mode === 'connecting') {
-    el.overlayText.textContent = `Conectando con ${state.partner.name}…`;
-  } else if (connected) {
-    el.partnerName.textContent = state.partner.name;
-    el.timer.textContent = '00:00';
+  } else if (inGroup) {
+    renderTiles();
+    if (!state.group.startedAt) el.timer.textContent = '00:00';
   }
 }
 
-function addMsg(kind, text) {
+function addMsg(kind, text, who) {
   const d = document.createElement('div');
   d.className = `msg ${kind}`;
   if (kind === 'me' || kind === 'them') {
-    const who = document.createElement('span');
-    who.className = 'who';
-    who.textContent = kind === 'me' ? 'Tú' : (state.partner ? state.partner.name : 'Extraño');
-    d.append(who);
+    const w = document.createElement('span');
+    w.className = 'who';
+    w.textContent = kind === 'me' ? 'Tú' : (who || 'Alguien');
+    d.append(w);
   }
   const t = document.createElement('span');
   t.textContent = text;
@@ -797,13 +1062,43 @@ async function copyLink() {
   toast('Enlace copiado ✅');
 }
 
+/* ----- Selector de tamaño de grupo ----- */
+function setSize(n, fromUser) {
+  state.size = clampSize(n);
+  storeSet('chispa:size', String(state.size));
+  el.sizePicker.querySelectorAll('button').forEach((b) => {
+    const on = Number(b.dataset.size) === state.size;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-checked', String(on));
+  });
+  el.selSize.value = String(state.size);
+  el.sizeHint.textContent = state.size === 2
+    ? 'Conversación 1 a 1: tú y otra persona.'
+    : `Llamada grupal de hasta ${state.size} personas contándote a ti. Solo te unimos con quienes eligieron ${state.size}.`;
+  if (!fromUser || !state.me) return;
+  lobbySend({ type: 'size', size: state.size });
+  if (state.searching && !state.group) {
+    lobbySend({ type: 'find', size: state.size });
+    setUI('searching');
+  } else if (state.group) {
+    toast(`Se aplicará cuando pases a Siguiente (${sizeLabel(state.size)})`);
+  }
+  renderStats();
+}
+
 /* ================= Eventos ================= */
+el.sizePicker.addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-size]');
+  if (b) setSize(b.dataset.size, true);
+});
+el.selSize.addEventListener('change', () => setSize(el.selSize.value, true));
+
 el.form.addEventListener('submit', async (e) => {
   e.preventDefault();
   state.name = clean(el.inName.value, 24) || randomNick();
   state.sala = slug(el.inSala.value);
   state.interests = parseInterests(el.inIntereses.value);
-  storeSet('chispa:name', state.name);
+  storeSet('chispa:name', clean(el.inName.value, 24));
   storeSet('chispa:interests', el.inIntereses.value);
   safe(() => { state.audioCtx = new (window.AudioContext || window.webkitAudioContext)(); });
 
@@ -828,7 +1123,6 @@ el.btnStop.addEventListener('click', stop);
 el.btnMic.addEventListener('click', toggleMic);
 el.btnCam.addEventListener('click', toggleCam);
 el.btnFlip.addEventListener('click', flipCamera);
-el.btnBlock.addEventListener('click', blockPartner);
 el.btnShare.addEventListener('click', openShare);
 el.btnCopy.addEventListener('click', copyLink);
 el.btnNativeShare.addEventListener('click', () => {
@@ -840,10 +1134,10 @@ el.formChat.addEventListener('submit', (e) => {
   e.preventDefault();
   const text = clean(el.inMsg.value, 500);
   if (!text) return;
-  if (sendPeer({ t: 'msg', text })) { addMsg('me', text); el.inMsg.value = ''; }
+  if (sendAll({ t: 'msg', text })) { addMsg('me', text); el.inMsg.value = ''; }
 });
 el.inMsg.addEventListener('input', () => {
-  if (Date.now() - state.lastTypingSent > 1500) { state.lastTypingSent = Date.now(); sendPeer({ t: 'typing' }); }
+  if (Date.now() - state.lastTypingSent > 1500) { state.lastTypingSent = Date.now(); sendAll({ t: 'typing' }); }
 });
 
 el.quick.addEventListener('click', (e) => {
@@ -851,8 +1145,8 @@ el.quick.addEventListener('click', (e) => {
   if (!b) return;
   if (b === el.btnIce) {
     const i = Math.floor(Math.random() * ROMPEHIELOS.length);
-    if (sendPeer({ t: 'ice', i })) addMsg('ice', `🎲 ${ROMPEHIELOS[i]}`);
-  } else if (b.dataset.emoji && sendPeer({ t: 'react', e: b.dataset.emoji })) {
+    if (sendAll({ t: 'ice', i })) addMsg('ice', `🎲 Tú: ${ROMPEHIELOS[i]}`);
+  } else if (b.dataset.emoji && sendAll({ t: 'react', e: b.dataset.emoji })) {
     floatEmoji(el.reactLocal, b.dataset.emoji);
   }
 });
@@ -865,7 +1159,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 window.addEventListener('pagehide', () => {
-  if (state.data && state.data.open) safe(() => state.data.send({ t: 'bye' }));
+  sendAll({ t: 'bye' });
   safe(() => state.lobbyPeer && state.lobbyPeer.destroy());
   safe(() => state.me && state.me.destroy());
 });
@@ -877,6 +1171,7 @@ window.addEventListener('pagehide', () => {
   if (salaParam && slug(salaParam) !== PUBLIC_ROOM) el.inSala.value = salaParam;
   el.inName.value = storeGet('chispa:name') || '';
   el.inIntereses.value = storeGet('chispa:interests') || '';
+  setSize(params.get('grupo') || storeGet('chispa:size') || 2, false);
   if (!window.Peer) {
     toast('No se pudo cargar PeerJS. Revisa tu conexión a internet.', 6000);
   }
