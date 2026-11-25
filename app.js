@@ -12,10 +12,34 @@
  */
 
 const PREFIX = 'chispa-v1-';
+const STUN_SERVERS = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
 const PEER_OPTS = {
   debug: 1,
-  config: { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] },
+  config: { iceServers: [...STUN_SERVERS] },
 };
+
+/* Carga servidores TURN desde config.js (si están configurados). */
+async function loadIceServers() {
+  const cfg = window.CHISPA_CONFIG || {};
+  let turn = Array.isArray(cfg.turnServers) ? cfg.turnServers.filter((s) => s && s.urls) : [];
+  if (cfg.meteredUrl) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 6000);
+      const res = await fetch(cfg.meteredUrl, { signal: ctrl.signal });
+      clearTimeout(t);
+      const list = await res.json();
+      if (Array.isArray(list)) turn = turn.concat(list);
+    } catch (e) {
+      console.warn('No se pudieron cargar los servidores TURN', e);
+    }
+  }
+  state.hasTurn = turn.some((s) => String(s.urls).includes('turn'));
+  PEER_OPTS.config.iceServers = [...STUN_SERVERS, ...turn];
+  console.info(`[Chispa] TURN ${state.hasTurn ? 'activo' : 'NO configurado'}`);
+}
+
+const NETWORK_TIP = 'Tu red podría estar bloqueando la conexión. Prueba con otra red (Wi-Fi ↔ datos móviles) y abre el enlace en Chrome o Safari, no dentro de WhatsApp o Instagram.';
 const EMOJIS = ['👋', '😂', '❤️', '🔥', '👏'];
 const ROMPEHIELOS = [
   '¿Cuál es la última canción que tuviste en repetición?',
@@ -276,6 +300,11 @@ function joinLobbyAsClient() {
     if (state.pendingLobby !== conn) return;
     state.pendingLobby = null;
     safe(() => conn.close());
+    state.lobbyFails = (state.lobbyFails || 0) + 1;
+    if (state.lobbyFails >= 2) {
+      setLobbyState('No logramos entrar a la sala, reintentando…');
+      if (!state.warnedNetwork) { state.warnedNetwork = true; toast(NETWORK_TIP, 9000); }
+    }
     retryLobby();
   };
   state.timers.lobbyJoin = setTimeout(fail, 8000);
@@ -283,6 +312,7 @@ function joinLobbyAsClient() {
     if (state.pendingLobby !== conn) return;
     clearTimeout(state.timers.lobbyJoin);
     state.pendingLobby = null;
+    state.lobbyFails = 0;
     state.lobbyConn = conn;
     state.lastLobbyMsg = Date.now();
     state.lobbySend = (m) => { if (conn.open) conn.send(m); };
@@ -493,7 +523,10 @@ function startWithPartner(m) {
   };
   setUI('connecting');
   state.timers.connect = setTimeout(() => {
-    if (!state.data || !state.data.open) partnerLeft('No se pudo conectar 😕 Buscando a otra persona…');
+    if (!state.data || !state.data.open) {
+      partnerLeft('No se pudo conectar 😕 Buscando a otra persona…');
+      if (!state.hasTurn) addMsg('sys', NETWORK_TIP);
+    }
   }, 12000);
 
   if (m.initiator) {
@@ -783,7 +816,7 @@ el.form.addEventListener('submit', async (e) => {
   el.app.classList.remove('hidden');
   el.lblSala.textContent = roomLabel();
   setUI('idle');
-  await initMedia(el.inSoloTexto.checked);
+  await Promise.all([initMedia(el.inSoloTexto.checked), loadIceServers()]);
   initPeer();
 });
 
