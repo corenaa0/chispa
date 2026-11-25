@@ -14,7 +14,7 @@
  *  - Si el anfitrión se va, los demás compiten por reservar el ID y uno nuevo toma el relevo.
  */
 
-const PREFIX = 'chispa-v3-';
+const PREFIX = 'chispa-v4-';
 const MIN_SIZE = 2;
 const MAX_SIZE = 8;
 // Si tras estos ms no hay gente con tu mismo número, te unimos a un grupo más pequeño.
@@ -26,60 +26,30 @@ const PEER_OPTS = {
 };
 const NETWORK_TIP = 'Tu red podría estar bloqueando la conexión. Prueba con otra red (Wi-Fi ↔ datos móviles) y abre el enlace en Chrome o Safari, no dentro de WhatsApp o Instagram.';
 const EMOJIS = ['👋', '😂', '❤️', '🔥', '👏', '😡'];
-const RETOS = [
-  'Imita a tu animal favorito durante 5 segundos 🐒',
-  'Muestra a la cámara el objeto más raro que tengas cerca 🔍',
-  'Di un trabalenguas sin equivocarte 👅',
-  'Haz tu mejor cara de sorpresa y mantenla 5 segundos 😲',
-  'Canta el coro de una canción que todos conozcan 🎤',
-  'Cuenta un chiste malo (mientras peor, mejor) 🤡',
-  'Habla como robot hasta tu próximo turno 🤖',
-  'Dibuja algo en 20 segundos y muéstralo; los demás adivinan ✏️',
-  'Haz 5 sentadillas en cámara 🏋️',
-  'Di 3 cosas que tengas en tu bolsillo o mochila 🎒',
-  'Describe tu día solo con emojis en el chat 📝',
-  'Imita a un profesor (sin decir quién es) 👨‍🏫',
-  'Haz el sonido de 3 animales seguidos 🐮🐸🦆',
-  'Mantén una mano en la cabeza hasta que alguien diga tu nombre 🙋',
-  'Cuenta tu talento más inútil y demuéstralo ✨',
-];
-const PREFIERES = [
-  '¿Qué prefieres: poder volar o ser invisible?',
-  '¿Qué prefieres: vivir sin música o sin series?',
-  '¿Qué prefieres: viajar al pasado o al futuro?',
-  '¿Qué prefieres: no usar el teléfono una semana o no comer dulces un mes?',
-  '¿Qué prefieres: hablar todos los idiomas o tocar todos los instrumentos?',
-  '¿Qué prefieres: siempre tener frío o siempre tener calor?',
-  '¿Qué prefieres: ser famoso o ser millonario en secreto?',
-  '¿Qué prefieres: playa sin internet o ciudad con internet lento?',
-  '¿Qué prefieres: saber cocinar de todo o saber arreglar de todo?',
-  '¿Qué prefieres: un perro que hable o un gato que cante?',
-  '¿Qué prefieres: vacaciones eternas sin amigos o clases eternas con amigos?',
-  '¿Qué prefieres: comer pizza o hamburguesa por el resto de tu vida?',
-];
-const ROMPEHIELOS = [
-  '¿Cuál es la última canción que tuviste en repetición?',
-  '¿Qué app usas más en tu teléfono y por qué?',
-  'Si pudieras aprender una habilidad en un día, ¿cuál sería?',
-  '¿Cuál es tu comida favorita para un día malo?',
-  '¿Qué serie o película recomendarías sin dudar?',
-  '¿Qué es lo más raro que sabes hacer?',
-  'Si tuvieras que crear una app mañana, ¿de qué sería?',
-  '¿Playa, montaña o ciudad?',
-  '¿Cuál fue el mejor momento de tu semana?',
-  '¿Qué lugar del mundo te gustaría conocer?',
-  '¿Madrugar o trasnochar?',
-  '¿Qué videojuego, libro o cómic te marcó?',
-  'Cuéntame un dato curioso que casi nadie sepa.',
-  '¿Qué superpoder elegirías y para qué lo usarías?',
-  '¿Cuál es tu plan ideal de fin de semana?',
-];
-// Juegos del chat: cada botón manda una tarjeta al azar a todo el grupo.
+// Límites anti-spam.
+const MAX_MSG = 200;          // caracteres por mensaje
+const MSG_COOLDOWN = 3000;    // espera entre mensajes (ms)
+const GAME_COOLDOWN = 15000;  // espera entre tarjetas de juego (ms), compartida por los 3 juegos
+
+// Juegos del chat: cada botón manda una tarjeta al azar a todo el grupo (las frases están en retos.js).
+const JUEGOS = window.CHISPA_JUEGOS || { ROMPEHIELOS: [], RETOS: [], PREFIERES: [] };
 const GAMES = {
-  ice: { icon: '🎲', title: 'Rompehielos', list: ROMPEHIELOS },
-  reto: { icon: '🎯', title: 'Reto', list: RETOS },
-  prefiere: { icon: '🤔', title: '¿Qué prefieres?', list: PREFIERES },
+  ice: { icon: '🎲', title: 'Rompehielos', list: JUEGOS.ROMPEHIELOS, bag: [] },
+  reto: { icon: '🎯', title: 'Reto', list: JUEGOS.RETOS, bag: [] },
+  prefiere: { icon: '🤔', title: '¿Qué prefieres?', list: JUEGOS.PREFIERES, bag: [] },
 };
+
+// Saca una tarjeta al azar sin repetir hasta haber usado todas (bolsa barajada).
+function drawCard(game) {
+  if (!game.bag.length) {
+    game.bag = game.list.map((_, i) => i);
+    for (let i = game.bag.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [game.bag[i], game.bag[j]] = [game.bag[j], game.bag[i]];
+    }
+  }
+  return game.bag.pop();
+}
 
 const $ = (s) => document.querySelector(s);
 const el = {
@@ -95,6 +65,7 @@ const el = {
   btnFlip: $('#btnFlip'), btnShare: $('#btnShare'),
   inAuto: $('#inAuto'), quick: $('#quick'),
   log: $('#log'), typing: $('#typing'), formChat: $('#formChat'), inMsg: $('#inMsg'), btnSend: $('#btnSend'),
+  msgCounter: $('#msgCounter'),
   reactLocal: $('#reactLocal'),
   dlgShare: $('#dlgShare'), dlgNormas: $('#dlgNormas'), shareLink: $('#shareLink'), shareSala: $('#shareSala'),
   qr: $('#qr'), btnCopy: $('#btnCopy'), btnNativeShare: $('#btnNativeShare'), toast: $('#toast'),
@@ -942,7 +913,11 @@ function onPeerData(p, d) {
       break;
     }
     case 'msg': {
-      const text = clean(d.text, 500);
+      // Aunque alguien modifique la app, aquí también aplicamos el límite y una espera mínima.
+      const now = Date.now();
+      if (now - (p.lastMsgAt || 0) < 1000) break;
+      p.lastMsgAt = now;
+      const text = clean(d.text, MAX_MSG);
       if (text) { addMsg('them', text, p.name); el.typing.classList.add('hidden'); }
       break;
     }
@@ -957,7 +932,12 @@ function onPeerData(p, d) {
       break;
     case 'game': {
       const game = Object.prototype.hasOwnProperty.call(GAMES, d.g) ? GAMES[d.g] : null;
-      if (game && Number.isInteger(d.i) && game.list[d.i]) addGameMsg(game, p.name, game.list[d.i]);
+      const now = Date.now();
+      if (now - (p.lastGameAt || 0) < GAME_COOLDOWN - 1500) break;
+      if (game && Number.isInteger(d.i) && game.list[d.i]) {
+        p.lastGameAt = now;
+        addGameMsg(game, p.name, game.list[d.i]);
+      }
       break;
     }
     case 'state': {
@@ -1053,8 +1033,9 @@ function setUI(mode) {
   el.spinner.classList.toggle('hidden', mode === 'idle');
   el.groupTag.classList.toggle('hidden', !inGroup);
   el.btnStop.disabled = mode === 'idle';
-  el.inMsg.disabled = el.btnSend.disabled = !live;
-  el.quick.querySelectorAll('button').forEach((b) => { b.disabled = !live; });
+  state.chatLive = live;
+  el.inMsg.disabled = !live;
+  refreshCooldowns();
   el.btnNext.textContent = mode === 'idle' ? '▶ Empezar' : '⏭ Siguiente';
   el.overlaySub.textContent = '';
   if (mode === 'idle') {
@@ -1207,13 +1188,46 @@ el.btnNativeShare.addEventListener('click', () => {
   navigator.share({ title: 'Chispa', text, url: el.shareLink.value }).catch(() => {});
 });
 
+/* ----- Esperas (cooldowns) del chat y de los juegos ----- */
+const secondsLeft = (since, ms) => Math.max(0, Math.ceil((since + ms - Date.now()) / 1000));
+
+function refreshCooldowns() {
+  clearTimeout(state.timers.cooldown);
+  const live = !!state.chatLive;
+  const msgLeft = secondsLeft(state.lastMsgAt || 0, MSG_COOLDOWN);
+  const gameLeft = secondsLeft(state.lastGameAt || 0, GAME_COOLDOWN);
+  el.btnSend.disabled = !live || msgLeft > 0;
+  el.btnSend.textContent = msgLeft > 0 ? `${msgLeft}s` : 'Enviar';
+  el.quick.querySelectorAll('.emojis button').forEach((b) => { b.disabled = !live; });
+  el.quick.querySelectorAll('button[data-game]').forEach((b) => {
+    b.disabled = !live || gameLeft > 0;
+    b.textContent = gameLeft > 0 ? `${b.dataset.label} · ${gameLeft}s` : b.dataset.label;
+  });
+  if (msgLeft > 0 || gameLeft > 0) state.timers.cooldown = setTimeout(refreshCooldowns, 250);
+}
+
+function updateCounter() {
+  const n = el.inMsg.value.length;
+  el.msgCounter.textContent = `${n}/${MAX_MSG}`;
+  el.msgCounter.classList.toggle('warn', n >= MAX_MSG - 20);
+}
+
 el.formChat.addEventListener('submit', (e) => {
   e.preventDefault();
-  const text = clean(el.inMsg.value, 500);
+  const wait = secondsLeft(state.lastMsgAt || 0, MSG_COOLDOWN);
+  if (wait > 0) { toast(`Espera ${wait}s para enviar otro mensaje`); return; }
+  const text = clean(el.inMsg.value, MAX_MSG);
   if (!text) return;
-  if (sendAll({ t: 'msg', text })) { addMsg('me', text); el.inMsg.value = ''; }
+  if (sendAll({ t: 'msg', text })) {
+    addMsg('me', text);
+    el.inMsg.value = '';
+    updateCounter();
+    state.lastMsgAt = Date.now();
+    refreshCooldowns();
+  }
 });
 el.inMsg.addEventListener('input', () => {
+  updateCounter();
   if (Date.now() - state.lastTypingSent > 1500) { state.lastTypingSent = Date.now(); sendAll({ t: 'typing' }); }
 });
 
@@ -1222,8 +1236,14 @@ el.quick.addEventListener('click', (e) => {
   if (!b) return;
   const game = b.dataset.game && GAMES[b.dataset.game];
   if (game) {
-    const i = Math.floor(Math.random() * game.list.length);
-    if (sendAll({ t: 'game', g: b.dataset.game, i })) addGameMsg(game, 'Tú', game.list[i]);
+    const wait = secondsLeft(state.lastGameAt || 0, GAME_COOLDOWN);
+    if (wait > 0 || !game.list.length) return;
+    const i = drawCard(game);
+    if (sendAll({ t: 'game', g: b.dataset.game, i })) {
+      addGameMsg(game, 'Tú', game.list[i]);
+      state.lastGameAt = Date.now();
+      refreshCooldowns();
+    }
   } else if (b.dataset.emoji && sendAll({ t: 'react', e: b.dataset.emoji })) {
     floatEmoji(el.reactLocal, b.dataset.emoji);
   }
@@ -1250,6 +1270,9 @@ window.addEventListener('pagehide', () => {
   el.inName.value = storeGet('chispa:name') || '';
   el.inIntereses.value = storeGet('chispa:interests') || '';
   setSize(params.get('grupo') || storeGet('chispa:size') || 2, false);
+  el.quick.querySelectorAll('button[data-game]').forEach((b) => { b.dataset.label = b.textContent.trim(); });
+  el.inMsg.maxLength = MAX_MSG;
+  updateCounter();
   if (!window.Peer) {
     toast('No se pudo cargar PeerJS. Revisa tu conexión a internet.', 6000);
   }

@@ -283,7 +283,10 @@ video.mirror { transform: scaleX(-1); }
 .chip:active:not(:disabled) { transform: scale(.95); }
 .chip.game { flex: 1; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
 .chip:disabled { opacity: .4; cursor: not-allowed; }
-.composer { display: flex; gap: 8px; padding: 0 12px 8px; }
+.composer { display: flex; gap: 8px; padding: 0 12px 8px; align-items: center; }
+.composer .btn { min-width: 84px; }
+.counter { font-size: 11px; color: var(--muted); min-width: 52px; text-align: right; font-variant-numeric: tabular-nums; }
+.counter.warn { color: var(--accent); font-weight: 700; }
 .composer input { margin: 0; }
 .hint { margin: 0; padding: 0 12px 10px; color: var(--muted); font-size: 12px; }
 kbd { background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font-size: 11px; }

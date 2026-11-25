@@ -17,7 +17,8 @@ con normas de convivencia y un botón para bloquear.
   También se puede abrir directo con `?grupo=4` en el enlace.
 - 🪜 Si no hay suficientes personas con tu número, a los 5 segundos te unimos a un grupo más pequeño
   (7, 6, 5… hasta 1 a 1). Nunca te ponemos en un grupo más grande de lo que elegiste.
-- 🎯 Juegos en el chat: **Rompehielos**, **Retos** y **¿Qué prefieres?** (llegan a todo el grupo).
+- 🎯 Juegos en el chat: **Rompehielos**, **Retos** y **¿Qué prefieres?**, 100 tarjetas de cada uno (en `retos.js`), al azar y sin repetir. Se puede mandar una tarjeta cada 15 segundos.
+- ⏱️ Chat con máximo 200 caracteres por mensaje (con contador) y 3 segundos de espera entre mensajes.
 - 🌎 **Sala pública por defecto**: si no pones código de sala, te emparejamos al azar con todos los conectados.
 - 🚪 Salas privadas opcionales por código: `?sala=mi-clase` en el enlace.
 - 🎭 El nombre también es opcional: si lo dejas vacío te asignamos un apodo al azar.
