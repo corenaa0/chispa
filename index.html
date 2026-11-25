@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Chispa · Videochat con tu clase</title>
+  <meta name="description" content="Videochat aleatorio entre compañeros: entra a una sala, comparte el enlace y conoce a quien te toque.">
+  <meta name="theme-color" content="#0f1020">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+
+  <!-- ============ Pantalla de inicio ============ -->
+  <main id="inicio" class="screen inicio">
+    <div class="card">
+      <div class="brand"><span class="logo">⚡</span><h1>Chispa</h1></div>
+      <p class="tagline">Videochat aleatorio… pero solo con tu gente. Entra a una sala, comparte el enlace y conoce a quien te toque.</p>
+
+      <form id="formInicio" autocomplete="off">
+        <label>Tu nombre <span class="opt">(opcional)</span>
+          <input id="inName" maxlength="24" placeholder="Ej. Laura">
+          <small>Si lo dejas vacío te ponemos un apodo al azar.</small>
+        </label>
+        <label>Código de sala
+          <input id="inSala" maxlength="32" placeholder="general">
+          <small>Todos los que usen el mismo código pueden encontrarse.</small>
+        </label>
+        <label>Intereses <span class="opt">(opcional)</span>
+          <input id="inIntereses" maxlength="120" placeholder="música, fútbol, anime">
+          <small>Separados por comas. Te emparejamos primero con quien comparta intereses.</small>
+        </label>
+        <label class="check"><input type="checkbox" id="inSoloTexto"> Entrar sin cámara (modo avatar)</label>
+        <label class="check"><input type="checkbox" id="inNormas" required> Acepto las <a href="#" id="verNormas">normas de convivencia</a></label>
+        <button class="btn primary big" type="submit">Entrar a la sala</button>
+      </form>
+    </div>
+    <footer>Las videollamadas van directo entre navegadores (WebRTC). Nada se graba ni se guarda.</footer>
+  </main>
+
+  <!-- ============ Pantalla de chat ============ -->
+  <div id="app" class="screen app hidden">
+    <header class="topbar">
+      <div class="brand small"><span class="logo">⚡</span><b>Chispa</b><span class="sala" id="lblSala"></span></div>
+      <div class="stats" id="lobbyState" title="Estado de la sala">
+        <span class="dot" id="lobbyDot"></span>
+        <span id="lblLobby">Conectando…</span>
+      </div>
+      <button class="btn ghost" id="btnShare" type="button">🔗 Invitar</button>
+    </header>
+
+    <section class="stage">
+      <div class="videos">
+        <div class="remote">
+          <video id="remoteVideo" autoplay playsinline></video>
+          <div class="overlay" id="overlay">
+            <div class="spinner hidden" id="spinner"></div>
+            <p id="overlayText">Pulsa <b>Empezar</b> para conocer a alguien</p>
+            <p class="sub" id="overlaySub"></p>
+          </div>
+          <div class="partner-tag hidden" id="partnerTag">
+            <b id="partnerName"></b>
+            <span id="partnerFlags"></span>
+            <span class="timer" id="timer">00:00</span>
+          </div>
+          <div class="reactions" id="reactRemote"></div>
+        </div>
+        <div class="local">
+          <video id="localVideo" class="mirror" autoplay playsinline muted></video>
+          <div class="reactions" id="reactLocal"></div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button class="btn primary" id="btnNext" type="button">▶ Empezar</button>
+        <button class="btn" id="btnStop" type="button" disabled>⏹ Detener</button>
+        <button class="btn icon" id="btnMic" type="button" title="Silenciar micrófono">🎤</button>
+        <button class="btn icon" id="btnCam" type="button" title="Apagar cámara">📷</button>
+        <button class="btn icon hidden" id="btnFlip" type="button" title="Cambiar de cámara">🔄</button>
+        <button class="btn icon danger" id="btnBlock" type="button" title="Bloquear y pasar" disabled>🚫</button>
+        <label class="toggle" title="Buscar a otra persona automáticamente cuando alguien se va">
+          <input type="checkbox" id="inAuto" checked> Auto
+        </label>
+      </div>
+    </section>
+
+    <aside class="chat">
+      <div class="log" id="log" aria-live="polite"></div>
+      <div class="typing hidden" id="typing">escribiendo…</div>
+      <div class="quick" id="quick">
+        <button class="chip" type="button" data-emoji="👋">👋</button>
+        <button class="chip" type="button" data-emoji="😂">😂</button>
+        <button class="chip" type="button" data-emoji="❤️">❤️</button>
+        <button class="chip" type="button" data-emoji="🔥">🔥</button>
+        <button class="chip" type="button" data-emoji="👏">👏</button>
+        <button class="chip wide" type="button" id="btnIce">🎲 Rompehielos</button>
+      </div>
+      <form class="composer" id="formChat" autocomplete="off">
+        <input id="inMsg" maxlength="500" placeholder="Escribe un mensaje…" disabled>
+        <button class="btn primary" id="btnSend" type="submit" disabled>Enviar</button>
+      </form>
+      <p class="hint">Atajo: <kbd>Esc</kbd> para pasar a la siguiente persona</p>
+    </aside>
+  </div>
+
+  <!-- ============ Diálogos ============ -->
+  <dialog id="dlgShare">
+    <h2>Invita a tus compañeros</h2>
+    <p>Quien abra este enlace entra a la misma sala <b id="shareSala"></b>.</p>
+    <div class="qr" id="qr"></div>
+    <div class="row">
+      <input id="shareLink" readonly>
+      <button class="btn primary" id="btnCopy" type="button">Copiar</button>
+    </div>
+    <div class="row end">
+      <button class="btn hidden" id="btnNativeShare" type="button">📤 Compartir…</button>
+      <button class="btn ghost" type="button" data-close>Cerrar</button>
+    </div>
+  </dialog>
+
+  <dialog id="dlgNormas">
+    <h2>Normas de convivencia</h2>
+    <ul>
+      <li>Trata a todos con respeto: nada de insultos, acoso ni contenido ofensivo.</li>
+      <li>No grabes ni hagas capturas de nadie sin su permiso.</li>
+      <li>No compartas datos personales (dirección, teléfono, contraseñas).</li>
+      <li>Si alguien te incomoda, usa <b>🚫 Bloquear</b> y pasa a la siguiente persona.</li>
+      <li>Las salas son para la clase: comparte el enlace solo con tus compañeros.</li>
+    </ul>
+    <div class="row end"><button class="btn primary" type="button" data-close>Entendido</button></div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status"></div>
+</body>
+</html>
